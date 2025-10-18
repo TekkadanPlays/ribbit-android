@@ -159,6 +159,10 @@ class DashboardViewModel : ViewModel() {
             "logout" -> {
                 // Handle logout
             }
+            "bug_report" -> {
+                // Open GitHub issues page
+                // This will be handled in the UI layer with LocalUriHandler
+            }
             else -> {
                 // Handle other menu items
             }

@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalUriHandler
 import kotlinx.coroutines.delay
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
@@ -109,9 +110,18 @@ fun OptimizedDashboardScreen(
     // ✅ PERFORMANCE: Cache theme colors (Thread view pattern)
     val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
     
+    val uriHandler = LocalUriHandler.current
+    
     ModernSidebar(
         drawerState = drawerState,
-        onItemClick = { itemId -> viewModel.onSidebarItemClick(itemId) },
+        onItemClick = { itemId -> 
+            when (itemId) {
+                "bug_report" -> {
+                    uriHandler.openUri("https://github.com/TekkadanPlays/ribbit-android/issues")
+                }
+                else -> viewModel.onSidebarItemClick(itemId)
+            }
+        },
         modifier = modifier
     ) {
         Scaffold(

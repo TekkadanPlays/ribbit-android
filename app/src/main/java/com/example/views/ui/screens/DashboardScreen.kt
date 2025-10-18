@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalUriHandler
 import kotlinx.coroutines.delay
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.collect
@@ -105,9 +106,18 @@ fun DashboardScreen(
     // ✅ Performance: Cache divider color (don't recreate on every item)
     val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
     
+    val uriHandler = LocalUriHandler.current
+    
     ModernSidebar(
         drawerState = drawerState,
-        onItemClick = { itemId -> viewModel.onSidebarItemClick(itemId) },
+        onItemClick = { itemId -> 
+            when (itemId) {
+                "bug_report" -> {
+                    uriHandler.openUri("https://github.com/TekkadanPlays/ribbit-android/issues")
+                }
+                else -> viewModel.onSidebarItemClick(itemId)
+            }
+        },
         modifier = modifier
     ) {
         Scaffold(
