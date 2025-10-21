@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -63,6 +64,27 @@ private fun isDuplicateRelay(url: String, existingRelays: List<UserRelay>): Bool
     return existingRelays.any { normalizeRelayUrl(it.url) == normalizedUrl }
 }
 
+// Helper function to create relay with NIP-11 info
+private fun createRelayWithNip11Info(
+    url: String,
+    read: Boolean = true,
+    write: Boolean = true,
+    nip11CacheManager: com.example.views.cache.Nip11CacheManager
+): UserRelay {
+    val normalizedUrl = normalizeRelayUrl(url)
+    val cachedInfo = nip11CacheManager.getCachedRelayInfo(normalizedUrl)
+    
+    return UserRelay(
+        url = normalizedUrl,
+        read = read,
+        write = write,
+        addedAt = System.currentTimeMillis(),
+        info = cachedInfo,
+        isOnline = cachedInfo != null,
+        lastChecked = if (cachedInfo != null) System.currentTimeMillis() else 0L
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RelayManagementScreen(
@@ -70,6 +92,7 @@ fun RelayManagementScreen(
     relayRepository: RelayRepository,
     modifier: Modifier = Modifier
 ) {
+    val nip11CacheManager = relayRepository.getNip11CacheManager()
     val viewModel: RelayManagementViewModel = viewModel {
         RelayManagementViewModel(relayRepository)
     }
@@ -89,12 +112,10 @@ fun RelayManagementScreen(
     var inboxRelayUrl by remember { mutableStateOf("") }
     var cacheRelayUrl by remember { mutableStateOf("") }
     
-    // Focus management for smart scrolling
-    var isAnyInputFocused by remember { mutableStateOf(false) }
-    var lastFocusedCategory by remember { mutableStateOf("") }
-    val outboxFocusRequester = remember { FocusRequester() }
-    val inboxFocusRequester = remember { FocusRequester() }
-    val cacheFocusRequester = remember { FocusRequester() }
+    // Input field visibility state
+    var showOutboxInput by remember { mutableStateOf(false) }
+    var showInboxInput by remember { mutableStateOf(false) }
+    var showCacheInput by remember { mutableStateOf(false) }
     
     // Separate relay lists for each category
     var outboxRelays by remember { mutableStateOf<List<UserRelay>>(emptyList()) }
@@ -229,202 +250,179 @@ fun RelayManagementScreen(
                 }
                 1 -> {
                     // Personal Tab
-                    val listState = rememberLazyListState()
-                    
-                    // Auto-scroll to top when no input is focused
-                    LaunchedEffect(isAnyInputFocused) {
-                        if (!isAnyInputFocused) {
-                            // Smooth scroll to top with a slight delay to ensure keyboard is dismissed
-                            kotlinx.coroutines.delay(100)
-                            listState.animateScrollToItem(0, scrollOffset = 0)
-                        }
-                    }
-                    
-                    // Reset scroll when adding relays (keyboard dismissal)
-                    LaunchedEffect(outboxRelayUrl, inboxRelayUrl, cacheRelayUrl) {
-                        if (outboxRelayUrl.isEmpty() && inboxRelayUrl.isEmpty() && cacheRelayUrl.isEmpty()) {
-                            // All inputs are empty, scroll to top
-                            kotlinx.coroutines.delay(200)
-                            listState.animateScrollToItem(0, scrollOffset = 0)
-                        }
-                    }
-                    
-                    // Reset scroll when relays are added (indicates successful input and keyboard dismissal)
-                    LaunchedEffect(outboxRelays.size, inboxRelays.size, cacheRelays.size) {
-                        // Small delay to ensure smooth transition after adding relay
-                        kotlinx.coroutines.delay(300)
-                        listState.animateScrollToItem(0, scrollOffset = 0)
-                    }
-                    
-                    Box(
-                        modifier = Modifier.fillMaxSize()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(bottom = 16.dp)
                     ) {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(bottom = 16.dp),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
                         // Outbox Relays
-                        item {
-                            RelayCategorySection(
-                                title = "Outbox Relays",
-                                description = "Relays for publishing your notes",
-                                relayUrl = outboxRelayUrl,
-                                onRelayUrlChange = { outboxRelayUrl = it },
-                                onAddRelay = {
-                                    if (outboxRelayUrl.isNotBlank()) {
-                                        val normalizedUrl = normalizeRelayUrl(outboxRelayUrl)
-                                        if (isDuplicateRelay(normalizedUrl, outboxRelays)) {
-                                            toastMessage = "${normalizedUrl} already exists in Outbox Relays"
-                                            showToast = true
-                                        } else {
-                                            val newRelay = UserRelay(
-                                                url = normalizedUrl,
-                                                read = true,
-                                                write = true
-                                            )
-                                            outboxRelays = outboxRelays + newRelay
-                                            outboxRelayUrl = ""
-                                        }
-                                    }
-                                },
-                                relays = outboxRelays,
-                                onRemoveRelay = { url ->
-                                    outboxRelays = outboxRelays.filter { it.url != url }
-                                },
-                                isLoading = uiState.isLoading,
-                                focusRequester = outboxFocusRequester,
-                                onFocusChanged = { isFocused ->
-                                    isAnyInputFocused = isFocused
-                                    if (isFocused) {
-                                        lastFocusedCategory = "outbox"
-                                        coroutineScope.launch {
-                                            // Scroll to Outbox category header (item 0)
-                                            listState.animateScrollToItem(0, scrollOffset = 50)
-                                        }
-                                    }
-                                }
-                            )
-                        }
-                        
-                        item {
-                            HorizontalDivider(
-                                thickness = 1.dp, 
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
-                        }
-                        
-                        // Inbox Relays
-                        item {
-                            RelayCategorySection(
-                                title = "Inbox Relays",
-                                description = "Relays for receiving notes from others",
-                                relayUrl = inboxRelayUrl,
-                                onRelayUrlChange = { inboxRelayUrl = it },
-                                onAddRelay = {
-                                    if (inboxRelayUrl.isNotBlank()) {
-                                        val normalizedUrl = normalizeRelayUrl(inboxRelayUrl)
-                                        if (isDuplicateRelay(normalizedUrl, inboxRelays)) {
-                                            toastMessage = "${normalizedUrl} already exists in Inbox Relays"
-                                            showToast = true
-                                        } else {
-                                            val newRelay = UserRelay(
-                                                url = normalizedUrl,
-                                                read = true,
-                                                write = true
-                                            )
-                                            inboxRelays = inboxRelays + newRelay
-                                            inboxRelayUrl = ""
-                                        }
-                                    }
-                                },
-                                relays = inboxRelays,
-                                onRemoveRelay = { url ->
-                                    inboxRelays = inboxRelays.filter { it.url != url }
-                                },
-                                isLoading = uiState.isLoading,
-                                focusRequester = inboxFocusRequester,
-                                onFocusChanged = { isFocused ->
-                                    isAnyInputFocused = isFocused
-                                    if (isFocused) {
-                                        lastFocusedCategory = "inbox"
-                                        coroutineScope.launch {
-                                            // Scroll to Inbox category header (item 2)
-                                            listState.animateScrollToItem(2, scrollOffset = 50)
-                                        }
-                                    }
-                                }
-                            )
-                        }
-                        
-                        item {
-                            HorizontalDivider(
-                                thickness = 1.dp, 
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
-                        }
-                        
-                        // Cache Relays
-                        item {
-                            RelayCategorySection(
-                                title = "Cache Relays",
-                                description = "Relays for caching and backup",
-                                relayUrl = cacheRelayUrl,
-                                onRelayUrlChange = { cacheRelayUrl = it },
-                                onAddRelay = {
-                                    if (cacheRelayUrl.isNotBlank()) {
-                                        val normalizedUrl = normalizeRelayUrl(cacheRelayUrl)
-                                        if (isDuplicateRelay(normalizedUrl, cacheRelays)) {
-                                            toastMessage = "${normalizedUrl} already exists in Cache Relays"
-                                            showToast = true
-                                        } else {
-                                            val newRelay = UserRelay(
-                                                url = normalizedUrl,
-                                                read = true,
-                                                write = true
-                                            )
-                                            cacheRelays = cacheRelays + newRelay
-                                            cacheRelayUrl = ""
-                                        }
-                                    }
-                                },
-                                relays = cacheRelays,
-                                onRemoveRelay = { url ->
-                                    cacheRelays = cacheRelays.filter { it.url != url }
-                                },
-                                onAddDefault = {
-                                    val defaultUrl = "wss://nos.lol"
-                                    if (isDuplicateRelay(defaultUrl, cacheRelays)) {
-                                        toastMessage = "wss://nos.lol already exists in Cache Relays"
+                        RelayCategorySectionWithAddButton(
+                            title = "Outbox Relays",
+                            description = "Relays for publishing your notes",
+                            relays = outboxRelays,
+                            onRemoveRelay = { url ->
+                                outboxRelays = outboxRelays.filter { it.url != url }
+                            },
+                            showInput = showOutboxInput,
+                            onToggleInput = { showOutboxInput = !showOutboxInput },
+                            relayUrl = outboxRelayUrl,
+                            onRelayUrlChange = { outboxRelayUrl = it },
+                            onAddRelay = {
+                                if (outboxRelayUrl.isNotBlank()) {
+                                    val normalizedUrl = normalizeRelayUrl(outboxRelayUrl)
+                                    if (isDuplicateRelay(normalizedUrl, outboxRelays)) {
+                                        toastMessage = "${normalizedUrl} already exists in Outbox Relays"
                                         showToast = true
                                     } else {
-                                        showDefaultConfirmation = true
-                                    }
-                                },
-                                isLoading = uiState.isLoading,
-                                focusRequester = cacheFocusRequester,
-                                onFocusChanged = { isFocused ->
-                                    isAnyInputFocused = isFocused
-                                    if (isFocused) {
-                                        lastFocusedCategory = "cache"
-                                        coroutineScope.launch {
-                                            // Scroll to Cache category header (item 4)
-                                            listState.animateScrollToItem(4, scrollOffset = 50)
+                                        val newRelay = createRelayWithNip11Info(
+                                            url = normalizedUrl,
+                                            read = true,
+                                            write = true,
+                                            nip11CacheManager = nip11CacheManager
+                                        )
+                                        outboxRelays = outboxRelays + newRelay
+                                        outboxRelayUrl = ""
+                                        showOutboxInput = false
+                                        
+                                        // Fetch fresh NIP-11 info in background if not cached
+                                        if (newRelay.info == null) {
+                                            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                                                val freshInfo = nip11CacheManager.getRelayInfo(normalizedUrl, forceRefresh = true)
+                                                if (freshInfo != null) {
+                                                    val updatedRelay = newRelay.copy(
+                                                        info = freshInfo,
+                                                        isOnline = true,
+                                                        lastChecked = System.currentTimeMillis()
+                                                    )
+                                                    outboxRelays = outboxRelays.map { if (it.url == normalizedUrl) updatedRelay else it }
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                            )
-                        }
+                            },
+                            isLoading = uiState.isLoading
+                        )
                         
-                        // Add minimum height to ensure scrollability
-                        item {
-                            Spacer(modifier = Modifier.height(600.dp))
-                        }
-                    }
+                        HorizontalDivider(
+                            thickness = 1.dp, 
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                        
+                        // Inbox Relays
+                        RelayCategorySectionWithAddButton(
+                            title = "Inbox Relays",
+                            description = "Relays for receiving notes from others",
+                            relays = inboxRelays,
+                            onRemoveRelay = { url ->
+                                inboxRelays = inboxRelays.filter { it.url != url }
+                            },
+                            showInput = showInboxInput,
+                            onToggleInput = { showInboxInput = !showInboxInput },
+                            relayUrl = inboxRelayUrl,
+                            onRelayUrlChange = { inboxRelayUrl = it },
+                            onAddRelay = {
+                                if (inboxRelayUrl.isNotBlank()) {
+                                    val normalizedUrl = normalizeRelayUrl(inboxRelayUrl)
+                                    if (isDuplicateRelay(normalizedUrl, inboxRelays)) {
+                                        toastMessage = "${normalizedUrl} already exists in Inbox Relays"
+                                        showToast = true
+                                    } else {
+                                        val newRelay = createRelayWithNip11Info(
+                                            url = normalizedUrl,
+                                            read = true,
+                                            write = true,
+                                            nip11CacheManager = nip11CacheManager
+                                        )
+                                        inboxRelays = inboxRelays + newRelay
+                                        inboxRelayUrl = ""
+                                        showInboxInput = false
+                                        
+                                        // Fetch fresh NIP-11 info in background if not cached
+                                        if (newRelay.info == null) {
+                                            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                                                val freshInfo = nip11CacheManager.getRelayInfo(normalizedUrl, forceRefresh = true)
+                                                if (freshInfo != null) {
+                                                    val updatedRelay = newRelay.copy(
+                                                        info = freshInfo,
+                                                        isOnline = true,
+                                                        lastChecked = System.currentTimeMillis()
+                                                    )
+                                                    inboxRelays = inboxRelays.map { if (it.url == normalizedUrl) updatedRelay else it }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            isLoading = uiState.isLoading
+                        )
+                        
+                        HorizontalDivider(
+                            thickness = 1.dp, 
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                        
+                        // Cache Relays
+                        RelayCategorySectionWithAddButton(
+                            title = "Cache Relays",
+                            description = "Relays for caching and backup",
+                            relays = cacheRelays,
+                            onRemoveRelay = { url ->
+                                cacheRelays = cacheRelays.filter { it.url != url }
+                            },
+                            showInput = showCacheInput,
+                            onToggleInput = { showCacheInput = !showCacheInput },
+                            relayUrl = cacheRelayUrl,
+                            onRelayUrlChange = { cacheRelayUrl = it },
+                            onAddRelay = {
+                                if (cacheRelayUrl.isNotBlank()) {
+                                    val normalizedUrl = normalizeRelayUrl(cacheRelayUrl)
+                                    if (isDuplicateRelay(normalizedUrl, cacheRelays)) {
+                                        toastMessage = "${normalizedUrl} already exists in Cache Relays"
+                                        showToast = true
+                                    } else {
+                                        val newRelay = createRelayWithNip11Info(
+                                            url = normalizedUrl,
+                                            read = true,
+                                            write = true,
+                                            nip11CacheManager = nip11CacheManager
+                                        )
+                                        cacheRelays = cacheRelays + newRelay
+                                        cacheRelayUrl = ""
+                                        showCacheInput = false
+                                        
+                                        // Fetch fresh NIP-11 info in background if not cached
+                                        if (newRelay.info == null) {
+                                            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                                                val freshInfo = nip11CacheManager.getRelayInfo(normalizedUrl, forceRefresh = true)
+                                                if (freshInfo != null) {
+                                                    val updatedRelay = newRelay.copy(
+                                                        info = freshInfo,
+                                                        isOnline = true,
+                                                        lastChecked = System.currentTimeMillis()
+                                                    )
+                                                    cacheRelays = cacheRelays.map { if (it.url == normalizedUrl) updatedRelay else it }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            onAddDefault = {
+                                val defaultUrl = "wss://nos.lol"
+                                if (isDuplicateRelay(defaultUrl, cacheRelays)) {
+                                    toastMessage = "wss://nos.lol already exists in Cache Relays"
+                                    showToast = true
+                                } else {
+                                    showDefaultConfirmation = true
+                                }
+                            },
+                            isLoading = uiState.isLoading
+                        )
                     }
                         }
                 }
@@ -449,10 +447,11 @@ fun RelayManagementScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val defaultRelay = UserRelay(
+                        val defaultRelay = createRelayWithNip11Info(
                             url = "wss://nos.lol",
                             read = true,
-                            write = true
+                            write = true,
+                            nip11CacheManager = nip11CacheManager
                         )
                         cacheRelays = cacheRelays + defaultRelay
                         showDefaultConfirmation = false
@@ -608,6 +607,117 @@ private fun RelayAddSectionNoPadding(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun RelayCategorySectionWithAddButton(
+    title: String,
+    description: String,
+    relays: List<UserRelay> = emptyList(),
+    onRemoveRelay: (String) -> Unit = {},
+    showInput: Boolean,
+    onToggleInput: () -> Unit,
+    relayUrl: String,
+    onRelayUrlChange: (String) -> Unit,
+    onAddRelay: () -> Unit,
+    onAddDefault: (() -> Unit)? = null,
+    isLoading: Boolean
+) {
+    val focusManager = LocalFocusManager.current
+    Column {
+        // Category Header with Add button
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            
+            // Add button
+            Row {
+                // Default button (only for cache relays)
+                onAddDefault?.let { addDefault ->
+                    OutlinedButton(
+                        onClick = addDefault,
+                        enabled = !isLoading,
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
+                        Text("Default")
+                    }
+                }
+                
+                // Add button
+                IconButton(
+                    onClick = onToggleInput,
+                    enabled = !isLoading
+                ) {
+                    Icon(
+                        imageVector = if (showInput) Icons.Default.Close else Icons.Default.Add,
+                        contentDescription = if (showInput) "Cancel" else "Add Relay"
+                    )
+                }
+            }
+        }
+        
+        // Relay Input (shown/hidden based on state)
+        if (showInput) {
+            RelayAddSectionNoPadding(
+                relayUrl = relayUrl,
+                onRelayUrlChange = onRelayUrlChange,
+                onAddRelay = {
+                    onAddRelay()
+                    focusManager.clearFocus()
+                },
+                isLoading = isLoading,
+                placeholder = "relay.example.com"
+            )
+        }
+        
+        // Add spacing below input when no relays are listed
+        if (relays.isEmpty() && !showInput) {
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+        
+        // Relay List
+        if (relays.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            relays.forEachIndexed { index, relay ->
+                RelaySettingsItem(
+                    relay = relay,
+                    connectionStatus = RelayConnectionStatus.DISCONNECTED, // TODO: Track connection status per category
+                    onRemove = { onRemoveRelay(relay.url) },
+                    onRefresh = { /* TODO: Implement refresh for category relays */ },
+                    onTestConnection = { /* TODO: Implement test for category relays */ }
+                )
+                
+                // Only add divider if not the last item
+                if (index < relays.size - 1) {
+                    HorizontalDivider(
+                        thickness = 1.dp, 
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -811,8 +921,8 @@ private fun RelaySettingsItem(
         }
     }
     
-    // Info sidebar
-    RelayInfoSidebar(
+    // Info tray
+    RelayInfoTray(
         relay = relay,
         onDismiss = { showInfoSheet = false },
         isVisible = showInfoSheet
@@ -821,191 +931,126 @@ private fun RelaySettingsItem(
 
 
 @Composable
-private fun RelayInfoSidebar(
+private fun RelayInfoTray(
     relay: UserRelay,
     onDismiss: () -> Unit,
     isVisible: Boolean
 ) {
     if (isVisible) {
         Dialog(onDismissRequest = onDismiss) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                // Backdrop
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.5f))
-                        .clickable { onDismiss() }
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
                 )
-                
-                // Sidebar content
-                Card(
+            ) {
+                Column(
                     modifier = Modifier
-                        .fillMaxHeight()
-                        .width(400.dp)
-                        .align(Alignment.CenterEnd)
-                        .padding(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    )
+                        .fillMaxWidth()
+                        .padding(16.dp)
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                            .padding(bottom = 32.dp)
+                    // Header
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Banner image with overlay
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(200.dp)
-                        ) {
-                            // Background banner image
-                            relay.info?.image?.let { imageUrl ->
-                                AsyncImage(
-                                    model = ImageRequest.Builder(LocalContext.current)
-                                        .data(imageUrl)
-                                        .crossfade(true)
-                                        .build(),
-                                    contentDescription = "Relay banner image",
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                                
-                                // Dark overlay for better text readability
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(
-                                            Color.Black.copy(alpha = 0.4f)
-                                        )
-                                )
-                            }
-                            
-                            // If no banner, use solid color
-                            if (relay.info?.image == null) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(MaterialTheme.colorScheme.primaryContainer)
-                                )
-                            }
-                            
-                            // Content overlay
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(20.dp),
-                                verticalArrangement = Arrangement.Bottom
-                            ) {
-                                // Icon or profile image
-                                relay.info?.icon?.let { iconUrl ->
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(LocalContext.current)
-                                            .data(iconUrl)
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = "Relay icon",
-                                        modifier = Modifier
-                                            .size(64.dp)
-                                            .clip(CircleShape)
-                                            .background(MaterialTheme.colorScheme.surface)
-                                    )
-                                    
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                }
-                                
-                                Text(
-                                    text = relay.displayName,
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (relay.info?.image != null) Color.White else MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                                
-                                Text(
-                                    text = relay.url,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = if (relay.info?.image != null) Color.White.copy(alpha = 0.9f) else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
+                        Text(
+                            text = "Relay Information",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close"
+                            )
                         }
-                        
-                        // Relay information
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 20.dp, vertical = 16.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            relay.description?.let { description ->
-                                Column {
-                                    Text(
-                                        text = "Description",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = description,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                }
-                            }
-                            
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(16.dp)
-                            ) {
-                                relay.software?.let { software ->
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "Software",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = software,
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                    }
-                                }
-                            }
-                            
-                            relay.info?.contact?.let { contact ->
-                                Column {
-                                    Text(
-                                        text = "Contact",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = contact,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                }
-                            }
-                            
-                            if (relay.supportedNips.isNotEmpty()) {
-                                Column {
-                                    Text(
-                                        text = "Supported NIPs",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = relay.supportedNips.joinToString(", ") { "NIP-$it" },
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                }
-                            }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    // Relay name and URL
+                    Text(
+                        text = relay.displayName,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = relay.url,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    // Relay information
+                    relay.description?.let { description ->
+                        Column {
+                            Text(
+                                text = "Description",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = description,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+                    }
+                    
+                    relay.software?.let { software ->
+                        Column {
+                            Text(
+                                text = "Software",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = software,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+                    }
+                    
+                    relay.info?.contact?.let { contact ->
+                        Column {
+                            Text(
+                                text = "Contact",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = contact,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+                    }
+                    
+                    if (relay.supportedNips.isNotEmpty()) {
+                        Column {
+                            Text(
+                                text = "Supported NIPs",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = relay.supportedNips.joinToString(", ") { "NIP-$it" },
+                                style = MaterialTheme.typography.bodyMedium
+                            )
                         }
                     }
                 }
