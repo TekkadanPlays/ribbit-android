@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
@@ -63,7 +65,7 @@ class RelayRepository(private val context: Context) {
                 return@withContext Result.failure(Exception("Relay already exists"))
             }
             
-            // Create new relay
+            // Create new relay WITHOUT NIP-11 info (add immediately)
             val newRelay = UserRelay(
                 url = normalizedUrl,
                 read = read,
@@ -71,18 +73,37 @@ class RelayRepository(private val context: Context) {
                 addedAt = System.currentTimeMillis()
             )
             
-            // Fetch NIP-11 information in background
-            val relayWithInfo = fetchRelayInfo(newRelay)
-            
-            // Add to list
-            val updatedRelays = existingRelays + relayWithInfo
+            // Add to list immediately for fast UI response
+            val updatedRelays = existingRelays + newRelay
             _relays.value = updatedRelays
             
             // Persist to storage
             saveRelaysToStorage(updatedRelays)
             
             Log.d(TAG, "✅ Added relay: $normalizedUrl")
-            Result.success(relayWithInfo)
+            
+            // Fetch NIP-11 information in background (non-blocking)
+            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val relayWithInfo = fetchRelayInfo(newRelay)
+                    
+                    // Update the relay with NIP-11 info
+                    val currentRelays = _relays.value
+                    val relayIndex = currentRelays.indexOfFirst { it.url == normalizedUrl }
+                    if (relayIndex != -1) {
+                        val updatedList = currentRelays.toMutableList().apply {
+                            set(relayIndex, relayWithInfo)
+                        }
+                        _relays.value = updatedList
+                        saveRelaysToStorage(updatedList)
+                        Log.d(TAG, "✅ Updated relay with NIP-11 info: $normalizedUrl")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠️ Failed to fetch NIP-11 info for $normalizedUrl: ${e.message}")
+                }
+            }
+            
+            Result.success(newRelay)
             
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to add relay: ${e.message}", e)

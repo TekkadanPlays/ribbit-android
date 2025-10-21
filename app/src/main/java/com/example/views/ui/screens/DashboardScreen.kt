@@ -119,6 +119,9 @@ fun DashboardScreen(
                 "user_profile" -> {
                     onNavigateTo("user_profile")
                 }
+                "relays" -> {
+                    onNavigateTo("relays")
+                }
                 "bug_report" -> {
                     uriHandler.openUri("https://github.com/TekkadanPlays/ribbit-android/issues")
                 }
