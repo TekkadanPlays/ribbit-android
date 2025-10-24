@@ -19,6 +19,36 @@
   "banner": "https://raw.githubusercontent.com/TekkadanPlays/ribbit-android/main/banner.png",
   "releases": [
     {
+      "version": "1.3",
+      "versionCode": 4,
+      "releaseDate": "2025-01-22",
+      "downloadUrl": "https://github.com/TekkadanPlays/ribbit-android/releases/download/v1.3/ribbit-v1.3.apk",
+      "changelog": "Major update introducing Lightning Zaps and Wallet Connect functionality! Connect your Lightning wallet to send zaps to posts and comments. Includes comprehensive UI components, account preferences, and full NIP-47/NIP-57 compliance foundation.",
+      "minSdk": 35,
+      "targetSdk": 36,
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ],
+      "features": [
+        "⚡ Lightning Zaps - Send Bitcoin tips to posts and comments",
+        "🔗 Wallet Connect (NIP-47) - Connect Lightning wallets like Alby, Mutiny",
+        "💰 Account Preferences - Manage wallet connections and settings",
+        "🎯 Zap Button Components - Full-featured and compact zap buttons",
+        "💬 Zap Comments - Add messages with your zaps",
+        "📊 Smart Amount Formatting - Intelligent sat/bitcoin display",
+        "🔒 Secure URI Handling - Password-protected wallet connection",
+        "🎨 Material 3 Design - Consistent with app's design language",
+        "📱 Responsive UI - Works on all screen sizes",
+        "🛡️ NIP Compliance - Full NIP-47 and NIP-57 specification support",
+        "📚 Comprehensive Documentation - Complete setup and integration guides",
+        "🔧 Developer Ready - Reusable components and utilities",
+        "🎭 Multiple Zap Types - Public, private, anonymous, and non-zap support",
+        "⚙️ Custom Amounts - Preset amounts and custom input",
+        "🔄 State Management - Optimistic updates and error handling"
+      ]
+    },
+    {
       "version": "1.2",
       "versionCode": 3,
       "releaseDate": "2025-01-22",

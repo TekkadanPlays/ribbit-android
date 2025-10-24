@@ -9,6 +9,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -28,6 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -43,6 +45,7 @@ import com.example.views.ui.components.AdaptiveHeader
 import com.example.views.ui.components.BottomNavigationBar
 import com.example.views.ui.components.NoteCard
 import com.example.views.ui.components.ProfilePicture
+import com.example.views.ui.components.ZapMenuRow
 import com.example.views.ui.icons.ArrowDownward
 import com.example.views.ui.icons.ArrowUpward
 import com.example.views.ui.icons.Bolt
@@ -88,6 +91,27 @@ fun ThreadViewScreen(
     val commentStates = remember { mutableStateMapOf<String, CommentState>() }
     var expandedControlsCommentId by remember { mutableStateOf<String?>(null) }
     
+    // ✅ ZAP MENU AWARENESS: Global state for zap menu closure (like feed cards)
+    var shouldCloseZapMenus by remember { mutableStateOf(false) }
+    var expandedZapMenuCommentId by remember { mutableStateOf<String?>(null) }
+    
+    // ✅ ZAP CONFIGURATION: Dialog state for editing zap amounts
+    var showZapConfigDialog by remember { mutableStateOf(false) }
+    var showWalletConnectDialog by remember { mutableStateOf(false) }
+    
+    // ✅ ZAP MENU AWARENESS: Close zap menus when scrolling starts (like feed cards)
+    var wasScrolling by remember { mutableStateOf(false) }
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress && !wasScrolling) {
+            // Scroll just started - close zap menus immediately
+            shouldCloseZapMenus = true
+            expandedZapMenuCommentId = null
+            kotlinx.coroutines.delay(100)
+            shouldCloseZapMenus = false
+        }
+        wasScrolling = listState.isScrollInProgress
+    }
+    
     // ✅ PERFORMANCE: Memoized timestamp formatting
     val formattedTimestamp = remember(note.timestamp) {
         formatTimestamp(note.timestamp)
@@ -132,6 +156,8 @@ fun ThreadViewScreen(
                             onComment = onComment,
                             onProfileClick = onProfileClick,
                             onNoteClick = { /* Already on thread */ },
+                            // ✅ MAIN NOTE ZAP AWARENESS: Pass zap menu state to main note
+                            shouldCloseZapMenus = shouldCloseZapMenus,
                             modifier = Modifier.fillMaxWidth()
                         )
                         
@@ -153,11 +179,21 @@ fun ThreadViewScreen(
                             onLike = onCommentLike,
                             onReply = onCommentReply,
                             onProfileClick = onProfileClick,
+                            onZap = { commentId, amount -> /* TODO: Handle zap */ },
+                            onCustomZap = { commentId -> /* TODO: Handle custom zap */ },
+                            onTestZap = { commentId -> /* TODO: Handle test zap */ },
+                            onZapSettings = { showZapConfigDialog = true },
                             depth = 0,
                             commentStates = commentStates,
                             expandedControlsCommentId = expandedControlsCommentId,
                             onExpandControls = { commentId ->
                                 expandedControlsCommentId = if (expandedControlsCommentId == commentId) null else commentId
+                            },
+                            // ✅ ZAP MENU AWARENESS: Pass zap menu state and handlers
+                            shouldCloseZapMenus = shouldCloseZapMenus,
+                            expandedZapMenuCommentId = expandedZapMenuCommentId,
+                            onExpandZapMenu = { commentId ->
+                                expandedZapMenuCommentId = if (expandedZapMenuCommentId == commentId) null else commentId
                             },
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -165,6 +201,23 @@ fun ThreadViewScreen(
                 }
             }
         }
+    }
+    
+    // ✅ ZAP CONFIGURATION: Dialogs for editing zap amounts
+    if (showZapConfigDialog) {
+        com.example.views.ui.components.ZapConfigurationDialog(
+            onDismiss = { showZapConfigDialog = false },
+            onOpenWalletSettings = { 
+                showZapConfigDialog = false
+                showWalletConnectDialog = true
+            }
+        )
+    }
+
+    if (showWalletConnectDialog) {
+        com.example.views.ui.components.WalletConnectDialog(
+            onDismiss = { showWalletConnectDialog = false }
+        )
     }
 }
 
@@ -174,10 +227,18 @@ private fun CommentThreadItem(
     onLike: (String) -> Unit,
     onReply: (String) -> Unit,
     onProfileClick: (String) -> Unit,
+    onZap: (String, Long) -> Unit = { _, _ -> },
+    onCustomZap: (String) -> Unit = {},
+    onTestZap: (String) -> Unit = {},
+    onZapSettings: () -> Unit = {},
     depth: Int,
     commentStates: MutableMap<String, CommentState>,
     expandedControlsCommentId: String?,
     onExpandControls: (String) -> Unit,
+    // ✅ ZAP MENU AWARENESS: Add zap menu state parameters
+    shouldCloseZapMenus: Boolean = false,
+    expandedZapMenuCommentId: String? = null,
+    onExpandZapMenu: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val commentId = commentThread.comment.id
@@ -213,6 +274,10 @@ private fun CommentThreadItem(
             onLike = onLike,
             onReply = onReply,
             onProfileClick = onProfileClick,
+            onZap = onZap,
+            onCustomZap = onCustomZap,
+            onTestZap = onTestZap,
+            onZapSettings = onZapSettings,
             isControlsExpanded = isControlsExpanded,
             onToggleControls = { onExpandControls(commentId) },
             isCollapsed = state.isCollapsed,
@@ -222,6 +287,10 @@ private fun CommentThreadItem(
                     isExpanded = !collapsed
                 )
             },
+            // ✅ ZAP MENU AWARENESS: Pass zap menu state to CommentCard
+            shouldCloseZapMenus = shouldCloseZapMenus,
+            expandedZapMenuCommentId = expandedZapMenuCommentId,
+            onExpandZapMenu = { onExpandZapMenu(commentId) },
             modifier = Modifier.fillMaxWidth()
         )
         
@@ -234,10 +303,18 @@ private fun CommentThreadItem(
                     onLike = onLike,
                     onReply = onReply,
                     onProfileClick = onProfileClick,
+                    onZap = onZap,
+                    onCustomZap = onCustomZap,
+                    onTestZap = onTestZap,
+                    onZapSettings = onZapSettings,
                     depth = depth + 1,
                     commentStates = commentStates,
                     expandedControlsCommentId = expandedControlsCommentId,
                     onExpandControls = onExpandControls,
+                    // ✅ ZAP MENU AWARENESS: Pass zap menu state to nested replies
+                    shouldCloseZapMenus = shouldCloseZapMenus,
+                    expandedZapMenuCommentId = expandedZapMenuCommentId,
+                    onExpandZapMenu = onExpandZapMenu,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -261,12 +338,30 @@ private fun CommentCard(
     onLike: (String) -> Unit,
     onReply: (String) -> Unit,
     onProfileClick: (String) -> Unit,
+    onZap: (String, Long) -> Unit = { _, _ -> },
+    onCustomZap: (String) -> Unit = {},
+    onTestZap: (String) -> Unit = {},
+    onZapSettings: () -> Unit = {},
     isControlsExpanded: Boolean,
     onToggleControls: () -> Unit,
     isCollapsed: Boolean,
     onCollapsedChange: (Boolean) -> Unit,
+    // ✅ ZAP MENU AWARENESS: Add zap menu state parameters
+    shouldCloseZapMenus: Boolean = false,
+    expandedZapMenuCommentId: String? = null,
+    onExpandZapMenu: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val commentId = comment.id
+    val isZapMenuExpanded = expandedZapMenuCommentId == commentId
+    
+    // ✅ ZAP MENU AWARENESS: Close zap menu when shouldCloseZapMenus is true (like feed cards)
+    LaunchedEffect(shouldCloseZapMenus) {
+        if (shouldCloseZapMenus && isZapMenuExpanded) {
+            onExpandZapMenu(commentId) // This will close the menu
+        }
+    }
+    
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -386,12 +481,12 @@ private fun CommentCard(
                                 onClick = { onReply(comment.id) }
                             )
                             
-                            // Zap - compact button
+                            // Zap - compact button with shared state
                             CompactCommentButton(
-                                icon = Icons.Outlined.Bolt,
+                                icon = Icons.Filled.Bolt,
                                 contentDescription = "Zap",
                                 isActive = false,
-                                onClick = { /* Handle zap */ }
+                                onClick = { onExpandZapMenu(commentId) }
                             )
                             
                             // More options - compact button
@@ -419,6 +514,112 @@ private fun CommentCard(
                                         leadingIcon = { Icon(Icons.Default.Report, contentDescription = null) }
                                     )
                                 }
+                            }
+                        }
+                    }
+                    
+                    // Zap menu - flowing layout with custom amounts, test, and edit buttons
+                    AnimatedVisibility(
+                        visible = isZapMenuExpanded,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            // Flowing zap amounts using FlowRow
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Get custom zap amounts from ZapAmountManager
+                                val context = LocalContext.current
+                                LaunchedEffect(Unit) {
+                                    com.example.views.utils.ZapAmountManager.initialize(context)
+                                }
+                                val zapAmounts by com.example.views.utils.ZapAmountManager.zapAmounts.collectAsState()
+                                
+                                // Zap amount chips - sorted largest to smallest
+                                zapAmounts.sortedDescending().forEach { amount ->
+                                    FilterChip(
+                                        selected = amount == 1L, // Highlight 1 sat
+                                        onClick = {
+                                            onExpandZapMenu(commentId) // Close menu using shared state
+                                            onZap(comment.id, amount)
+                                        },
+                                        label = {
+                                            Text(
+                                                text = com.example.views.utils.ZapUtils.formatZapAmount(amount),
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 14.sp
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Filled.Bolt,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = Color(0xFFFFA500),
+                                            selectedLabelColor = Color.White,
+                                            selectedLeadingIconColor = Color.White,
+                                            containerColor = Color(0xFFFFA500),
+                                            labelColor = Color.White,
+                                            iconColor = Color.White
+                                        ),
+                                        border = BorderStroke(
+                                            width = 1.dp,
+                                            color = Color(0xFFFFA500)
+                                        )
+                                    )
+                                }
+                                
+                                // Test zap chip
+                                FilterChip(
+                                    selected = false,
+                                    onClick = {
+                                        onExpandZapMenu(commentId) // Close menu using shared state
+                                        onTestZap(comment.id)
+                                    },
+                                    label = { Text("TEST") },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Filled.BugReport,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                        labelColor = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                                
+                                // Edit zap amounts chip
+                                FilterChip(
+                                    selected = false,
+                                    onClick = {
+                                        onExpandZapMenu(commentId) // Close menu using shared state
+                                        onZapSettings()
+                                    },
+                                    label = { Text("Edit") },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Filled.Edit,
+                                            contentDescription = "Edit Zap Amounts",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                        labelColor = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
                             }
                         }
                     }

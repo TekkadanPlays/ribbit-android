@@ -36,10 +36,37 @@ object SampleData {
             displayName = "World Traveler",
             avatarUrl = null,
             isVerified = true
+        ),
+        Author(
+            id = "6",
+            username = "tekkadan",
+            displayName = "🐸 Tekkadan",
+            avatarUrl = null,
+            isVerified = true
         )
     )
 
     val sampleNotes = listOf(
+        Note(
+            id = "announcement-1",
+            author = sampleAuthors[5], // Tekkadan
+            content = "🎉 Exciting news! Check out the new zap menus in notes and comments! ⚡️ Feedback is warmly welcomed at https://github.com/TekkadanPlays/Ribbit/discussions 🐸",
+            timestamp = System.currentTimeMillis() - 1800000, // 30 minutes ago
+            likes = 156,
+            shares = 34,
+            comments = 28,
+            isLiked = false,
+            hashtags = listOf("Ribbit", "Updates", "ZapMenus", "Feedback"),
+            urlPreviews = listOf(
+                UrlPreviewInfo(
+                    url = "https://github.com/TekkadanPlays/Ribbit/discussions",
+                    title = "Ribbit Discussions",
+                    description = "GitHub Discussions for Ribbit - a modern social media platform",
+                    imageUrl = "https://github.githubassets.com/images/modules/site/social-cards/github-social.png",
+                    siteName = "github.com"
+                )
+            )
+        ),
         Note(
             id = "1",
             author = sampleAuthors[0],
@@ -65,13 +92,22 @@ object SampleData {
         Note(
             id = "3",
             author = sampleAuthors[2],
-            content = "Working on a new project that's going to revolutionize how we think about productivity. Can't wait to share more details soon! 💻 #Productivity #Innovation #Startup",
+            content = "Working on a new project that's going to revolutionize how we think about productivity. Can't wait to share more details soon! 💻 Check out this amazing resource: https://www.notion.so/productivity-guide #Productivity #Innovation #Startup",
             timestamp = System.currentTimeMillis() - 10800000, // 3 hours ago
             likes = 67,
             shares = 15,
             comments = 23,
             isLiked = false,
-            hashtags = listOf("Productivity", "Innovation", "Startup")
+            hashtags = listOf("Productivity", "Innovation", "Startup"),
+            urlPreviews = listOf(
+                UrlPreviewInfo(
+                    url = "https://www.notion.so/productivity-guide",
+                    title = "The Ultimate Productivity Guide",
+                    description = "Learn how to maximize your productivity with proven techniques and tools",
+                    imageUrl = "https://www.notion.so/images/page-cover/woodcuts_1.jpg",
+                    siteName = "notion.so"
+                )
+            )
         ),
         Note(
             id = "4",

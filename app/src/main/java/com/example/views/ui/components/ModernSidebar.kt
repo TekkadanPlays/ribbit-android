@@ -20,6 +20,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.views.viewmodel.RelayManagementViewModel
+import com.example.views.repository.RelayRepository
+import com.example.views.data.RelayConnectionStatus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -27,6 +31,7 @@ fun ModernSidebar(
     drawerState: DrawerState,
     onItemClick: (String) -> Unit = {},
     authState: com.example.views.data.AuthState? = null,
+    relays: List<com.example.views.data.UserRelay> = emptyList(),
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
@@ -43,7 +48,8 @@ fun ModernSidebar(
                         onItemClick(itemId)
                         scope.launch { drawerState.close() }
                     },
-                    authState = authState
+                    authState = authState,
+                    relays = relays
                 )
             }
         },
@@ -57,6 +63,7 @@ fun ModernSidebar(
 private fun SidebarContent(
     onItemClick: (String) -> Unit,
     authState: com.example.views.data.AuthState? = null,
+    relays: List<com.example.views.data.UserRelay> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     val isSignedIn = authState?.isAuthenticated == true
@@ -121,17 +128,11 @@ private fun SidebarContent(
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-        // Navigation items - conditional based on auth state
-        getModernMenuItems(isSignedIn).forEach { item ->
-            NavigationDrawerItem(
-                label = { Text(item.title) },
-                selected = false,
-                icon = { Icon(item.icon, contentDescription = item.title) },
-                badge = item.badge?.let { { Text(it) } },
-                onClick = { onItemClick(item.id) },
-                modifier = Modifier.padding(horizontal = 12.dp)
-            )
-        }
+        // Relay information section
+        RelayInfoSection(
+            onItemClick = onItemClick,
+            relays = relays
+        )
 
         Spacer(modifier = Modifier.height(12.dp))
     }
@@ -162,13 +163,108 @@ private fun getModernMenuItems(isSignedIn: Boolean): List<ModernSidebarMenuItem>
     }
 }
 
+@Composable
+private fun RelayInfoSection(
+    onItemClick: (String) -> Unit,
+    relays: List<com.example.views.data.UserRelay>,
+    modifier: Modifier = Modifier
+) {
+    // Section header
+    Text(
+        text = "Relays",
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+    )
+    
+    if (relays.isEmpty()) {
+        // Show empty state with link to manage relays
+        NavigationDrawerItem(
+            label = { Text("No relays added") },
+            selected = false,
+            icon = { 
+                Icon(
+                    imageVector = Icons.Outlined.Add,
+                    contentDescription = "Add Relays"
+                ) 
+            },
+            onClick = { onItemClick("relays") },
+            modifier = Modifier.padding(horizontal = 12.dp)
+        )
+    } else {
+        // Show relay list
+        relays.forEach { relay ->
+            RelayListItem(
+                relay = relay,
+                onClick = { onItemClick("relays") }
+            )
+        }
+    }
+}
+
+@Composable
+private fun RelayListItem(
+    relay: com.example.views.data.UserRelay,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    NavigationDrawerItem(
+        label = { 
+            Column {
+                Text(
+                    text = relay.displayName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+                Text(
+                    text = relay.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+        },
+        selected = false,
+        icon = { 
+            Icon(
+                imageVector = Icons.Outlined.Router,
+                contentDescription = "Relay",
+                tint = if (relay.isOnline) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            ) 
+        },
+        onClick = onClick,
+        modifier = Modifier.padding(horizontal = 12.dp)
+    )
+}
+
 @Preview(showBackground = true)
 @Composable
 fun ModernSidebarPreview() {
     MaterialTheme {
         ModernSidebar(
             drawerState = rememberDrawerState(initialValue = DrawerValue.Open),
-            onItemClick = {}
+            onItemClick = {},
+            relays = listOf(
+                com.example.views.data.UserRelay(
+                    url = "wss://relay.damus.io",
+                    read = true,
+                    write = true,
+                    isOnline = true
+                ),
+                com.example.views.data.UserRelay(
+                    url = "wss://nos.lol",
+                    read = true,
+                    write = true,
+                    isOnline = false
+                )
+            )
         ) {
             // Empty content for preview
         }

@@ -116,7 +116,8 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
         if (accountsJson != null) {
             try {
                 val accounts = json.decodeFromString<List<AccountInfo>>(accountsJson)
-                _savedAccounts.value = accounts.sortedByDescending { it.lastUsed }
+                // Keep accounts in the order they were added (don't sort by lastUsed)
+                _savedAccounts.value = accounts
                 Log.d("AccountStateViewModel", "📚 Loaded ${accounts.size} saved accounts")
             } catch (e: Exception) {
                 Log.e("AccountStateViewModel", "❌ Failed to load accounts: ${e.message}")
@@ -182,11 +183,10 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
             )
         }
 
-        // Save to accounts list
+        // Save to accounts list - maintain order of addition
         val updatedAccounts = _savedAccounts.value
             .filter { it.npub != npub }
             .plus(accountInfo)
-            .sortedByDescending { it.lastUsed }
 
         saveSavedAccounts(updatedAccounts)
 
@@ -231,7 +231,6 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
             val updatedAccounts = _savedAccounts.value
                 .filter { it.npub != accountInfo.npub }
                 .plus(updatedAccount)
-                .sortedByDescending { it.lastUsed }
 
             saveSavedAccounts(updatedAccounts)
 

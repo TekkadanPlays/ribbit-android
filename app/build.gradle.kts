@@ -18,8 +18,8 @@ android {
         applicationId = "com.example.views"
         minSdk = 35
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -114,6 +114,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("io.coil-kt:coil-compose:2.5.0")
+    
+    // HTML parsing for URL previews
+    implementation("org.jsoup:jsoup:1.17.2")
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

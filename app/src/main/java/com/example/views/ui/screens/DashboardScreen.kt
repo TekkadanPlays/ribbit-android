@@ -49,6 +49,8 @@ import com.example.views.ui.components.ModernNoteCard
 import com.example.views.ui.components.NoteCard
 import com.example.views.viewmodel.DashboardViewModel
 import com.example.views.viewmodel.AuthViewModel
+import com.example.views.viewmodel.RelayManagementViewModel
+import com.example.views.repository.RelayRepository
 import com.example.views.ui.performance.animatedYOffset
 import java.text.SimpleDateFormat
 import java.util.*
@@ -73,6 +75,7 @@ fun DashboardScreen(
     listState: LazyListState = rememberLazyListState(),
     viewModel: DashboardViewModel = viewModel(),
     accountStateViewModel: com.example.views.viewmodel.AccountStateViewModel = viewModel(),
+    relayRepository: RelayRepository? = null,
     onLoginClick: (() -> Unit)? = null,
     onTopAppBarStateChange: (TopAppBarState) -> Unit = {},
     initialTopAppBarState: TopAppBarState? = null,
@@ -82,6 +85,16 @@ fun DashboardScreen(
     val authState by accountStateViewModel.authState.collectAsState()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    
+    // Relay management
+    val relayViewModel: RelayManagementViewModel? = relayRepository?.let { 
+        viewModel { RelayManagementViewModel(it) } 
+    }
+    val relayUiState = if (relayViewModel != null) {
+        relayViewModel.uiState.collectAsState().value
+    } else {
+        com.example.views.viewmodel.RelayManagementUiState()
+    }
 
     // Search state - using simple String instead of TextFieldValue
     var searchQuery by remember { mutableStateOf("") }
@@ -94,6 +107,25 @@ fun DashboardScreen(
 
     // Account switcher state
     var showAccountSwitcher by remember { mutableStateOf(false) }
+    
+    // Zap menu state - shared across all note cards
+    var shouldCloseZapMenus by remember { mutableStateOf(false) }
+    
+    // Zap configuration dialog state
+    var showZapConfigDialog by remember { mutableStateOf(false) }
+    var showWalletConnectDialog by remember { mutableStateOf(false) }
+
+    // Close zap menus when feed scroll starts (not during scroll)
+    var wasScrolling by remember { mutableStateOf(false) }
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress && !wasScrolling) {
+            // Scroll just started - close zap menus immediately
+            shouldCloseZapMenus = true
+            kotlinx.coroutines.delay(100)
+            shouldCloseZapMenus = false
+        }
+        wasScrolling = listState.isScrollInProgress
+    }
 
     // Use Material3's built-in scroll behavior for top app bar
     // Inherit state from thread view when navigating back
@@ -169,6 +201,7 @@ fun DashboardScreen(
             }
         },
         authState = authState,
+        relays = relayUiState.relays,
         modifier = modifier
     ) {
         Scaffold(
@@ -334,6 +367,8 @@ fun DashboardScreen(
                             onComment = { noteId -> onThreadClick(note) },
                             onProfileClick = onProfileClick,
                             onNoteClick = onThreadClick,
+                            onZapSettings = { showZapConfigDialog = true },
+                            shouldCloseZapMenus = shouldCloseZapMenus,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -351,6 +386,24 @@ fun DashboardScreen(
                 showAccountSwitcher = false
                 onLoginClick?.invoke()
             }
+        )
+    }
+
+    // Zap configuration dialog
+    if (showZapConfigDialog) {
+        com.example.views.ui.components.ZapConfigurationDialog(
+            onDismiss = { showZapConfigDialog = false },
+            onOpenWalletSettings = { 
+                showZapConfigDialog = false
+                showWalletConnectDialog = true
+            }
+        )
+    }
+
+    // Wallet Connect dialog
+    if (showWalletConnectDialog) {
+        com.example.views.ui.components.WalletConnectDialog(
+            onDismiss = { showWalletConnectDialog = false }
         )
     }
 }

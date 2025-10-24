@@ -30,11 +30,11 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { 
+                title = {
                     Text(
                         text = "settings",
                         fontWeight = FontWeight.Bold
-                    ) 
+                    )
                 },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
@@ -62,26 +62,26 @@ fun SettingsScreen(
             SettingsItem(icon = Icons.Outlined.Settings, title = "General", onClick = { /* TODO */ })
             SettingsItem(icon = Icons.Outlined.Edit, title = "Appearance", onClick = { onNavigateTo("appearance") })
             SettingsItem(icon = Icons.Outlined.Notifications, title = "Notifications", onClick = { /* TODO */ })
-            SettingsItem(icon = Icons.Outlined.Person, title = "Account Preferences", onClick = { /* TODO */ })
+            SettingsItem(icon = Icons.Outlined.Person, title = "Account Preferences", onClick = { onNavigateTo("account_preferences") })
             SettingsItem(icon = Icons.Outlined.Lock, title = "Filters & Blocks", onClick = { /* TODO */ })
             SettingsItem(icon = Icons.Outlined.Settings, title = "Data and Storage", onClick = { /* TODO */ })
             SettingsItem(icon = Icons.Outlined.Settings, title = "Advanced", onClick = { /* TODO */ })
-            
+
             HorizontalDivider(
-                thickness = 1.dp, 
+                thickness = 1.dp,
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
             )
-            
+
             SettingsItem(icon = Icons.Outlined.FavoriteBorder, title = "Support Ribbit", onClick = { /* TODO */ }, iconTint = Color(0xFFE57373))
-            
+
             HorizontalDivider(
-                thickness = 1.dp, 
+                thickness = 1.dp,
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
             )
-            
+
             SettingsItem(icon = Icons.Outlined.BugReport, title = "Report a Bug", onClick = onBugReportClick)
             SettingsItem(icon = Icons.Outlined.Info, title = "About", onClick = { onNavigateTo("about") })
-            
+
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
@@ -122,4 +122,3 @@ fun SettingsScreenPreview() {
         SettingsScreen(onBackClick = {})
     }
 }
-

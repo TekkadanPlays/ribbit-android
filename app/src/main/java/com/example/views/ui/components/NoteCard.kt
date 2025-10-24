@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,8 +44,21 @@ fun NoteCard(
     onComment: (String) -> Unit = {},
     onProfileClick: (String) -> Unit = {},
     onNoteClick: (Note) -> Unit = {},
+    onZap: (String, Long) -> Unit = { _, _ -> },
+    onCustomZap: (String) -> Unit = {},
+    onTestZap: (String) -> Unit = {},
+    onZapSettings: () -> Unit = {},
+    shouldCloseZapMenus: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    var isZapMenuExpanded by remember { mutableStateOf(false) }
+    
+    // Close zap menu when feed scrolls
+    LaunchedEffect(shouldCloseZapMenus) {
+        if (shouldCloseZapMenus) {
+            isZapMenuExpanded = false
+        }
+    }
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
@@ -69,9 +83,9 @@ fun NoteCard(
                     size = 40.dp,
                     onClick = { onProfileClick(note.author.id) }
                 )
-                
+
                 Spacer(modifier = Modifier.width(12.dp))
-                
+
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -109,16 +123,36 @@ fun NoteCard(
                     )
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(12.dp))
-            
+
             // Content
             Text(
                 text = note.content,
                 style = MaterialTheme.typography.bodyLarge,
                 lineHeight = 20.sp
             )
-            
+
+            // URL Previews
+            if (note.urlPreviews.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    note.urlPreviews.forEach { previewInfo ->
+                        UrlPreviewCard(
+                            previewInfo = previewInfo,
+                            onUrlClick = { url ->
+                                // Handle URL click - could open in browser
+                            },
+                            onUrlLongClick = { url ->
+                                // Handle URL long click - could show context menu
+                            }
+                        )
+                    }
+                }
+            }
+
             // Hashtags
             if (note.hashtags.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
@@ -129,9 +163,9 @@ fun NoteCard(
                     )
                 )
             }
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             // Action buttons - 6 icons total with expanded hitboxes
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -145,7 +179,7 @@ fun NoteCard(
                     onClick = { /* Test button */ },
                     modifier = Modifier.weight(1f)
                 )
-                
+
                 // Downvote button - expanded hitbox
                 ActionButton(
                     icon = Icons.Outlined.ArrowDownward,
@@ -153,7 +187,7 @@ fun NoteCard(
                     onClick = { /* Test button */ },
                     modifier = Modifier.weight(1f)
                 )
-                
+
                 // Bookmark button - expanded hitbox
                 ActionButton(
                     icon = Icons.Outlined.Bookmark,
@@ -161,7 +195,7 @@ fun NoteCard(
                     onClick = { /* Test button */ },
                     modifier = Modifier.weight(1f)
                 )
-                
+
                 // Comment button - expanded hitbox
                 ActionButton(
                     icon = Icons.Outlined.ChatBubble,
@@ -169,15 +203,15 @@ fun NoteCard(
                     onClick = { onComment(note.id) },
                     modifier = Modifier.weight(1f)
                 )
-                
-                // Lightning bolt button - expanded hitbox
+
+                // Zap button - simple square icon like others
                 ActionButton(
-                    icon = Icons.Outlined.Bolt,
-                    contentDescription = "Lightning",
-                    onClick = { /* Test button */ },
+                    icon = Icons.Filled.Bolt,
+                    contentDescription = "Zap",
+                    onClick = { isZapMenuExpanded = !isZapMenuExpanded },
                     modifier = Modifier.weight(1f)
                 )
-                
+
                 // More options menu - expanded hitbox
                 ActionButton(
                     icon = Icons.Default.MoreVert,
@@ -186,6 +220,16 @@ fun NoteCard(
                     modifier = Modifier.weight(1f)
                 )
             }
+
+            // Zap menu - completely separate, appears below action buttons
+            ZapMenuRow(
+                isExpanded = isZapMenuExpanded,
+                onExpandedChange = { isZapMenuExpanded = it },
+                onZap = { amount -> onZap(note.id, amount) },
+                onCustomZap = { onCustomZap(note.id) },
+                onTestZap = { onTestZap(note.id) },
+                onSettingsClick = onZapSettings
+            )
         }
     }
 }
@@ -216,7 +260,7 @@ private fun ActionButton(
 private fun formatTimestamp(timestamp: Long): String {
     val now = System.currentTimeMillis()
     val diff = now - timestamp
-    
+
     return when {
         diff < TimeUnit.MINUTES.toMillis(1) -> "now"
         diff < TimeUnit.HOURS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toMinutes(diff)}m"

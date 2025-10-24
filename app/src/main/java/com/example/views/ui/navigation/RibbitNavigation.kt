@@ -28,6 +28,7 @@ import androidx.navigation.navArgument
 import com.example.views.data.SampleData
 import com.example.views.repository.RelayRepository
 import com.example.views.ui.screens.AboutScreen
+import com.example.views.ui.screens.AccountPreferencesScreen
 import com.example.views.ui.screens.AppearanceSettingsScreen
 import com.example.views.ui.screens.DashboardScreen
 import com.example.views.ui.screens.ModernThreadViewScreen
@@ -115,6 +116,7 @@ fun RibbitNavigation(
                 },
                 onScrollToTop = { /* Handled in DashboardScreen */ },
                 accountStateViewModel = accountStateViewModel,
+                relayRepository = relayRepository,
                 onLoginClick = {
                     val loginIntent = accountStateViewModel.loginWithAmber()
                     onAmberLogin(loginIntent)
@@ -264,6 +266,7 @@ fun RibbitNavigation(
                 onNavigateTo = { screen ->
                     when (screen) {
                         "appearance" -> navController.navigate("settings/appearance")
+                        "account_preferences" -> navController.navigate("settings/account_preferences")
                         "about" -> navController.navigate("settings/about")
                     }
                 },
@@ -281,6 +284,15 @@ fun RibbitNavigation(
                 onBackClick = {
                     navController.popBackStack()
                 }
+            )
+        }
+
+        composable("settings/account_preferences") {
+            AccountPreferencesScreen(
+                onBackClick = {
+                    navController.popBackStack()
+                },
+                accountStateViewModel = accountStateViewModel
             )
         }
 
