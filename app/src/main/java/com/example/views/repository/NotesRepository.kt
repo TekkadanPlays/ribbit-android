@@ -30,14 +30,9 @@ class NotesRepository {
     private val socketBuilder = BasicOkHttpWebSocket.Builder { _ -> okHttpClient }
     private val nostrClient = NostrClient(socketBuilder, scope)
 
-    // Visible notes (shown in the feed)
+    // All notes - stream live to UI as they arrive
     private val _notes = MutableStateFlow<List<Note>>(emptyList())
     val notes: StateFlow<List<Note>> = _notes.asStateFlow()
-
-    // Cached notes (buffered until user pulls to refresh)
-    private val cachedNotes = mutableListOf<Note>()
-    private val _cachedNotesCount = MutableStateFlow(0)
-    val cachedNotesCount: StateFlow<Int> = _cachedNotesCount.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -48,14 +43,8 @@ class NotesRepository {
     private var connectedRelays = listOf<String>()
     private var currentSubscription: NostrClientSubscription? = null
 
-    // Track if this is the first batch to auto-flush
-    private var isFirstBatch = true
-    private var firstBatchFlushed = false
-
     companion object {
         private const val TAG = "NotesRepository"
-        private const val FIRST_BATCH_SIZE = 10 // Auto-flush first 10 notes
-        private const val FIRST_BATCH_DELAY = 2000L // Wait 2 seconds before auto-flush
     }
 
     /**
@@ -87,10 +76,6 @@ class NotesRepository {
         }
         connectedRelays = emptyList()
         _notes.value = emptyList()
-
-        // Reset first batch tracking
-        isFirstBatch = true
-        firstBatchFlushed = false
     }
 
     /**
@@ -105,10 +90,6 @@ class NotesRepository {
         _isLoading.value = true
         _error.value = null
         _notes.value = emptyList()
-
-        // Reset first batch tracking for new subscription
-        isFirstBatch = true
-        firstBatchFlushed = false
 
         try {
             // Close previous subscription if exists
@@ -136,14 +117,8 @@ class NotesRepository {
                 }
             )
 
-            // Launch auto-flush for first batch
-            scope.launch {
-                delay(FIRST_BATCH_DELAY)
-                autoFlushFirstBatch()
-            }
-
             // Give it a moment to connect and start receiving
-            delay(2000)
+            delay(1000)
             _isLoading.value = false
 
             Log.d(TAG, "Subscription active for ${connectedRelays.size} relays")
@@ -162,10 +137,6 @@ class NotesRepository {
         _isLoading.value = true
         _error.value = null
         _notes.value = emptyList()
-
-        // Reset first batch tracking for new subscription
-        isFirstBatch = true
-        firstBatchFlushed = false
 
         try {
             // Close previous subscription
@@ -193,14 +164,8 @@ class NotesRepository {
                 }
             )
 
-            // Launch auto-flush for first batch
-            scope.launch {
-                delay(FIRST_BATCH_DELAY)
-                autoFlushFirstBatch()
-            }
-
             // Give it a moment to connect and start receiving
-            delay(2000)
+            delay(1000)
             _isLoading.value = false
 
             Log.d(TAG, "Subscription active for relay: $relayUrl")
@@ -224,10 +189,6 @@ class NotesRepository {
         _isLoading.value = true
         _error.value = null
         _notes.value = emptyList()
-
-        // Reset first batch tracking for new subscription
-        isFirstBatch = true
-        firstBatchFlushed = false
 
         try {
             currentSubscription?.destroy()
@@ -253,13 +214,7 @@ class NotesRepository {
                 }
             )
 
-            // Launch auto-flush for first batch
-            scope.launch {
-                delay(FIRST_BATCH_DELAY)
-                autoFlushFirstBatch()
-            }
-
-            delay(2000)
+            delay(1000)
             _isLoading.value = false
 
             Log.d(TAG, "Author subscription active")
@@ -272,76 +227,24 @@ class NotesRepository {
     }
 
     /**
-     * Handle incoming event from relay
+     * Handle incoming event from relay - add directly to feed (live streaming)
      */
     private fun handleEvent(event: Event) {
         try {
             if (event.kind == 1) {
                 val note = convertEventToNote(event)
 
-                // Add to cached notes buffer if not duplicate
-                synchronized(cachedNotes) {
-                    val allNotes = _notes.value + cachedNotes
-                    if (!allNotes.any { it.id == note.id }) {
-                        cachedNotes.add(note)
-                        _cachedNotesCount.value = cachedNotes.size
-                        Log.d(TAG, "Cached note from ${note.author.username}: ${note.content.take(50)}... (Cached: ${cachedNotes.size})")
+                // Add directly to notes list if not duplicate (Amethyst pattern)
+                val currentNotes = _notes.value
+                if (!currentNotes.any { it.id == note.id }) {
+                    val newNotes = (currentNotes + note).sortedByDescending { it.timestamp }
+                    _notes.value = newNotes
 
-                        // Check if we should auto-flush first batch
-                        if (isFirstBatch && !firstBatchFlushed && cachedNotes.size >= FIRST_BATCH_SIZE) {
-                            scope.launch {
-                                delay(500) // Brief delay to let a few more notes arrive
-                                autoFlushFirstBatch()
-                            }
-                        }
-                    }
+                    Log.d(TAG, "Added note from ${note.author.username}: ${note.content.take(50)}... (Total: ${newNotes.size})")
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error handling event: ${e.message}", e)
-        }
-    }
-
-    /**
-     * Auto-flush the first batch of notes to immediately populate the feed
-     */
-    private fun autoFlushFirstBatch() {
-        synchronized(cachedNotes) {
-            if (firstBatchFlushed || cachedNotes.isEmpty()) {
-                return
-            }
-
-            firstBatchFlushed = true
-            val currentNotes = _notes.value
-            val newNotes = (currentNotes + cachedNotes).sortedByDescending { it.timestamp }
-            _notes.value = newNotes
-
-            Log.d(TAG, "Auto-flushed first batch: ${cachedNotes.size} notes to feed")
-
-            cachedNotes.clear()
-            _cachedNotesCount.value = 0
-            isFirstBatch = false
-        }
-    }
-
-    /**
-     * Flush cached notes to visible notes (called on pull-to-refresh)
-     */
-    fun flushCachedNotes() {
-        synchronized(cachedNotes) {
-            if (cachedNotes.isEmpty()) {
-                Log.d(TAG, "No cached notes to flush")
-                return
-            }
-
-            val currentNotes = _notes.value
-            val newNotes = (currentNotes + cachedNotes).sortedByDescending { it.timestamp }
-            _notes.value = newNotes
-
-            Log.d(TAG, "Flushed ${cachedNotes.size} cached notes to feed (Total: ${newNotes.size})")
-
-            cachedNotes.clear()
-            _cachedNotesCount.value = 0
         }
     }
 
@@ -380,14 +283,10 @@ class NotesRepository {
     }
 
     /**
-     * Clear all notes (both visible and cached)
+     * Clear all notes
      */
     fun clearNotes() {
         _notes.value = emptyList()
-        synchronized(cachedNotes) {
-            cachedNotes.clear()
-            _cachedNotesCount.value = 0
-        }
     }
 
     /**

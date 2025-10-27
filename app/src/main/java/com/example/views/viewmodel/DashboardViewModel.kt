@@ -21,8 +21,7 @@ data class DashboardUiState(
     val error: String? = null,
     val currentDestination: String = "home",
     val hasRelays: Boolean = false,
-    val isLoadingFromRelays: Boolean = false,
-    val cachedNotesCount: Int = 0
+    val isLoadingFromRelays: Boolean = false
 )
 
 class DashboardViewModel : ViewModel() {
@@ -83,13 +82,7 @@ class DashboardViewModel : ViewModel() {
             }
         }
 
-        viewModelScope.launch {
-            notesRepository.cachedNotesCount.collect { count ->
-                _uiState.value = _uiState.value.copy(
-                    cachedNotesCount = count
-                )
-            }
-        }
+
     }
 
     private fun connectWebSocket() {
@@ -334,9 +327,7 @@ class DashboardViewModel : ViewModel() {
      */
     fun refreshNotes() {
         Log.d(TAG, "Refreshing notes - flushing cached notes to feed")
-        viewModelScope.launch {
-            notesRepository.flushCachedNotes()
-        }
+        // Notes now stream live - no manual flush needed
     }
 
     override fun onCleared() {
