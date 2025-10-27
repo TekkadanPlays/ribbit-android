@@ -168,7 +168,7 @@ object MaterialMotion {
         
         fun enterTransition(forward: Boolean = true): EnterTransition {
             return slideInHorizontally(
-                initialOffsetX = { if (forward) it / SLIDE_DISTANCE else -it / SLIDE_DISTANCE },
+                initialOffsetX = { if (forward) it else -it },
                 animationSpec = tween(
                     durationMillis = DURATION,
                     easing = EasingStandardDecelerate
@@ -183,7 +183,7 @@ object MaterialMotion {
         
         fun exitTransition(forward: Boolean = true): ExitTransition {
             return slideOutHorizontally(
-                targetOffsetX = { if (forward) -it / SLIDE_DISTANCE else it / SLIDE_DISTANCE },
+                targetOffsetX = { if (forward) -it else it },
                 animationSpec = tween(
                     durationMillis = DURATION,
                     easing = EasingStandardAccelerate

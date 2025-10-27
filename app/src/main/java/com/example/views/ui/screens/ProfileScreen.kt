@@ -30,11 +30,9 @@ import androidx.compose.ui.unit.sp
 import com.example.views.data.Author
 import com.example.views.data.Note
 import com.example.views.data.SampleData
-import com.example.views.ui.components.BottomNavigationBar
 import com.example.views.ui.components.ModernSearchBar
 import com.example.views.ui.components.NoteCard
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
     author: Author,
@@ -49,142 +47,43 @@ fun ProfileScreen(
     listState: LazyListState = rememberLazyListState(),
     modifier: Modifier = Modifier
 ) {
-    // Search state - using simple String
-    var isSearchMode by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
-    
-    // Filter results based on search query using derivedStateOf
-    val searchResults by remember {
-        derivedStateOf {
-            if (searchQuery.isBlank()) {
-                emptyList()
-            } else {
-                authorNotes.filter { note ->
-                    note.content.contains(searchQuery, ignoreCase = true) ||
-                    note.author.displayName.contains(searchQuery, ignoreCase = true) ||
-                    note.author.username.contains(searchQuery, ignoreCase = true) ||
-                    note.hashtags.any { it.contains(searchQuery, ignoreCase = true) }
-                }
-            }
-        }
+    // Use predictive back for smooth gesture navigation
+    androidx.activity.compose.BackHandler {
+        onBackClick()
     }
     
     Scaffold(
-        bottomBar = {
-            // ✅ BLACK BACKGROUND: Space beneath home bar should be black
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.Black)
-            ) {
-                BottomNavigationBar(
-                    currentDestination = "profile",
-                    onDestinationClick = { destination ->
-                        when (destination) {
-                            "profile" -> { /* Already on profile, do nothing */ }
-                            "home" -> onBackClick() // Go back to dashboard
-                            "search" -> isSearchMode = true
-                            else -> { /* Other destinations not implemented yet */ }
-                        }
-                    }
-                )
-            }
-        }
     ) { paddingValues ->
-        Box(modifier = modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                // Top App Bar
-                TopAppBar(
-                    title = {
-                        Text(
-                            text = author.displayName,
-                            style = MaterialTheme.typography.headlineSmall.copy(
-                                fontWeight = FontWeight.Bold
-                            ),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = onBackClick) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = { /* TODO: Implement more options */ }) {
-                            Icon(
-                                imageVector = Icons.Default.MoreVert,
-                                contentDescription = "More options",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
+        LazyColumn(
+            state = listState,
+            modifier = modifier
+                .fillMaxSize()
+                .padding(paddingValues),
+            contentPadding = PaddingValues(top = 8.dp)
+        ) {
+            // Profile Header
+            item {
+                ProfileHeader(
+                    author = author,
+                    modifier = Modifier.fillMaxWidth()
                 )
-                
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding() + 8.dp, top = 8.dp)
-                ) {
-                    // Profile Header
-                    item {
-                        ProfileHeader(
-                            author = author,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    
-                    item {
-                        Spacer(modifier = Modifier.height(24.dp))
-                    }
-                    
-                    // Notes List
-                    items(authorNotes.size) { index ->
-                        val note = authorNotes[index]
-                        NoteCard(
-                            note = note,
-                            onLike = onLike,
-                            onShare = onShare,
-                            onComment = onComment,
-                            onProfileClick = onProfileClick,
-                            onNoteClick = onNoteClick,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
             }
             
-            // Search bar overlay - appears in header area when active
-            if (isSearchMode) {
-                ModernSearchBar(
-                    query = searchQuery,
-                    onQueryChange = { searchQuery = it },
-                    onSearch = { /* Optional: Handle explicit search submission */ },
-                    searchResults = searchResults,
-                    onResultClick = { note ->
-                        onNoteClick(note)
-                        isSearchMode = false
-                        searchQuery = ""
-                    },
-                    active = isSearchMode,
-                    onActiveChange = { active -> 
-                        if (!active) {
-                            isSearchMode = false
-                            searchQuery = ""
-                        }
-                    },
-                    onBackClick = { 
-                        searchQuery = ""
-                        isSearchMode = false 
-                    },
-                    placeholder = { Text("Search ${author.displayName}'s notes...") },
-                    modifier = Modifier.padding(paddingValues)
+            item {
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+            
+            // Notes List
+            items(authorNotes.size) { index ->
+                val note = authorNotes[index]
+                NoteCard(
+                    note = note,
+                    onLike = onLike,
+                    onShare = onShare,
+                    onComment = onComment,
+                    onProfileClick = onProfileClick,
+                    onNoteClick = onNoteClick,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }

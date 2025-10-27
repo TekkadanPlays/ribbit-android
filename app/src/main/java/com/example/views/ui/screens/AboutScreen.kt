@@ -67,7 +67,7 @@ fun AboutScreen(
         ) {
             Spacer(modifier = Modifier.height(48.dp))
             
-            // Frog emoji (no green box)
+            // Frog emoji (our app icon theme)
             Text(
                 text = "🐸",
                 fontSize = 72.sp,

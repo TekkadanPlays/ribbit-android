@@ -22,10 +22,89 @@
 
 # Keep custom icons
 -keep class com.example.views.ui.icons.** { *; }
--keep class androidx.compose.material.icons.Icons$Outlined { *; }
 
-# Keep Compose Material Icons
--keep class androidx.compose.material.icons.** { *; }
+# Optimize Material Icons - only keep used icons to reduce APK size
+# Remove unused icons to improve build times and reduce APK size
+-keep class androidx.compose.material.icons.Icons$Default {
+    public static androidx.compose.ui.graphics.vector.ImageVector Home;
+    public static androidx.compose.ui.graphics.vector.ImageVector Router;
+    public static androidx.compose.ui.graphics.vector.ImageVector Email;
+    public static androidx.compose.ui.graphics.vector.ImageVector Notifications;
+    public static androidx.compose.ui.graphics.vector.ImageVector AccountBalanceWallet;
+    public static androidx.compose.ui.graphics.vector.ImageVector Star;
+    public static androidx.compose.ui.graphics.vector.ImageVector Favorite;
+    public static androidx.compose.ui.graphics.vector.ImageVector Reply;
+    public static androidx.compose.ui.graphics.vector.ImageVector PersonAdd;
+    public static androidx.compose.ui.graphics.vector.ImageVector MoreVert;
+    public static androidx.compose.ui.graphics.vector.ImageVector Share;
+    public static androidx.compose.ui.graphics.vector.ImageVector Report;
+    public static androidx.compose.ui.graphics.vector.ImageVector Add;
+    public static androidx.compose.ui.graphics.vector.ImageVector Clear;
+    public static androidx.compose.ui.graphics.vector.ImageVector KeyboardArrowDown;
+    public static androidx.compose.ui.graphics.vector.ImageVector Menu;
+    public static androidx.compose.ui.graphics.vector.ImageVector FilterList;
+    public static androidx.compose.ui.graphics.vector.ImageVector Person;
+    public static androidx.compose.ui.graphics.vector.ImageVector Settings;
+    public static androidx.compose.ui.graphics.vector.ImageVector Info;
+    public static androidx.compose.ui.graphics.vector.ImageVector Close;
+    public static androidx.compose.ui.graphics.vector.ImageVector Publish;
+    public static androidx.compose.ui.graphics.vector.ImageVector Refresh;
+    public static androidx.compose.ui.graphics.vector.ImageVector Wifi;
+    public static androidx.compose.ui.graphics.vector.ImageVector Delete;
+    public static androidx.compose.ui.graphics.vector.ImageVector ChevronRight;
+    public static androidx.compose.ui.graphics.vector.ImageVector History;
+    public static androidx.compose.ui.graphics.vector.ImageVector NorthWest;
+    public static androidx.compose.ui.graphics.vector.ImageVector SearchOff;
+    public static androidx.compose.ui.graphics.vector.ImageVector KeyboardArrowUp;
+    public static androidx.compose.ui.graphics.vector.ImageVector Comment;
+    public static androidx.compose.ui.graphics.vector.ImageVector List;
+    public static androidx.compose.ui.graphics.vector.ImageVector Palette;
+    public static androidx.compose.ui.graphics.vector.ImageVector ColorLens;
+    public static androidx.compose.ui.graphics.vector.ImageVector Tune;
+}
+
+-keep class androidx.compose.material.icons.Icons$Outlined {
+    public static androidx.compose.ui.graphics.vector.ImageVector ArrowUpward;
+    public static androidx.compose.ui.graphics.vector.ImageVector ArrowDownward;
+    public static androidx.compose.ui.graphics.vector.ImageVector Bookmark;
+    public static androidx.compose.ui.graphics.vector.ImageVector Reply;
+    public static androidx.compose.ui.graphics.vector.ImageVector Bolt;
+    public static androidx.compose.ui.graphics.vector.ImageVector ChatBubble;
+    public static androidx.compose.ui.graphics.vector.ImageVector ChatBubbleOutline;
+    public static androidx.compose.ui.graphics.vector.ImageVector AlternateEmail;
+    public static androidx.compose.ui.graphics.vector.ImageVector Home;
+    public static androidx.compose.ui.graphics.vector.ImageVector TrendingUp;
+    public static androidx.compose.ui.graphics.vector.ImageVector Schedule;
+    public static androidx.compose.ui.graphics.vector.ImageVector Login;
+    public static androidx.compose.ui.graphics.vector.ImageVector Settings;
+    public static androidx.compose.ui.graphics.vector.ImageVector Edit;
+    public static androidx.compose.ui.graphics.vector.ImageVector Notifications;
+    public static androidx.compose.ui.graphics.vector.ImageVector Person;
+    public static androidx.compose.ui.graphics.vector.ImageVector Lock;
+    public static androidx.compose.ui.graphics.vector.ImageVector FavoriteBorder;
+    public static androidx.compose.ui.graphics.vector.ImageVector BugReport;
+    public static androidx.compose.ui.graphics.vector.ImageVector Info;
+    public static androidx.compose.ui.graphics.vector.ImageVector Router;
+    public static androidx.compose.ui.graphics.vector.ImageVector Publish;
+    public static androidx.compose.ui.graphics.vector.ImageVector Refresh;
+    public static androidx.compose.ui.graphics.vector.ImageVector Wifi;
+    public static androidx.compose.ui.graphics.vector.ImageVector Delete;
+    public static androidx.compose.ui.graphics.vector.ImageVector Palette;
+    public static androidx.compose.ui.graphics.vector.ImageVector ColorLens;
+    public static androidx.compose.ui.graphics.vector.ImageVector Tune;
+}
+
+-keep class androidx.compose.material.icons.Icons$Filled {
+    public static androidx.compose.ui.graphics.vector.ImageVector ChevronRight;
+    public static androidx.compose.ui.graphics.vector.ImageVector List;
+}
+
+-keep class androidx.compose.material.icons.Icons$AutoMirrored$Filled {
+    public static androidx.compose.ui.graphics.vector.ImageVector ArrowBack;
+    public static androidx.compose.ui.graphics.vector.ImageVector List;
+}
+
+# Keep vector graphics classes
 -keep class androidx.compose.ui.graphics.vector.** { *; }
 
 # Optimization flags for better performance

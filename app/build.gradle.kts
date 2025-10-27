@@ -9,17 +9,17 @@ plugins {
 }
 
 android {
-    namespace = "com.example.views"
+    namespace = "com.tekkadan.ribbit"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.example.views"
+        applicationId = "com.tekkadan.ribbit"
         minSdk = 35
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 3
+        versionName = "0.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -43,8 +43,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -108,6 +108,15 @@ dependencies {
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.kotlinx.serialization.json)
+    
+    // Nostr and Amber dependencies
+    implementation("com.vitorpamplona.amethyst:quartz")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("io.coil-kt:coil-compose:2.5.0")
+    
+    // HTML parsing for URL previews
+    implementation("org.jsoup:jsoup:1.17.2")
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

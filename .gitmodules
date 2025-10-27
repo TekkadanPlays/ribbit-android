@@ -1,0 +1,3 @@
+[submodule "external/amethyst"]
+	path = external/amethyst
+	url = https://github.com/vitorpamplona/amethyst.git

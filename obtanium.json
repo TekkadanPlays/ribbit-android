@@ -19,25 +19,29 @@
   "banner": "https://raw.githubusercontent.com/TekkadanPlays/ribbit-android/main/banner.png",
   "releases": [
     {
-      "version": "1.0",
-      "versionCode": 1,
-      "releaseDate": "2024-01-01",
-      "downloadUrl": "https://github.com/TekkadanPlays/ribbit-android/releases/download/v1.0/ribbit-v1.0.apk",
-      "changelog": "Initial release with modern UI and core features",
+      "version": "0.0.3",
+      "versionCode": 3,
+      "releaseDate": "2025-01-22",
+      "downloadUrl": "https://github.com/TekkadanPlays/ribbit-android/releases/download/v0.0.3/ribbit-v0.0.3.apk",
+      "changelog": "Clean v0.0.3 release with Lightning Zaps and Wallet Connect functionality. Connect your Lightning wallet to send zaps to posts and comments.",
       "minSdk": 35,
       "targetSdk": 36,
+      "packageId": "com.tekkadan.ribbit",
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"
       ],
       "features": [
-        "Modern Material Design 3 UI",
-        "Jetpack Compose architecture",
-        "State preservation across navigation",
-        "Thread view with comment hierarchy",
-        "Profile management",
-        "Search functionality",
-        "Responsive design"
+        "⚡ Lightning Zaps - Send Bitcoin tips to posts and comments",
+        "🔗 Wallet Connect - Connect Lightning wallets like Alby, Mutiny",
+        "💰 Account Preferences - Manage wallet connections",
+        "🎯 Zap Button Components - Full-featured zap buttons",
+        "💬 Zap Comments - Add messages with your zaps",
+        "📊 Smart Amount Formatting - Intelligent sat/bitcoin display",
+        "🔒 Secure URI Handling - Password-protected wallet connection",
+        "🎨 Material 3 Design - Modern UI with consistent design",
+        "📱 Responsive UI - Works on all screen sizes",
+        "🛡️ NIP Compliance - Full NIP-47 and NIP-57 support"
       ]
     }
   ]

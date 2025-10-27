@@ -17,7 +17,8 @@ data class Note(
     val isLiked: Boolean = false,
     val isShared: Boolean = false,
     val mediaUrls: List<String> = emptyList(),
-    val hashtags: List<String> = emptyList()
+    val hashtags: List<String> = emptyList(),
+    val urlPreviews: List<UrlPreviewInfo> = emptyList()
 )
 
 @Immutable

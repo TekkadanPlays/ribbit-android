@@ -30,6 +30,8 @@ import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.foundation.layout.consumeWindowInsets
 import kotlinx.coroutines.delay
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.collect
@@ -38,12 +40,17 @@ import com.example.views.data.Note
 import com.example.views.data.SampleData
 import com.example.views.ui.components.AdaptiveHeader
 import com.example.views.ui.components.BottomNavigationBar
+import com.example.views.ui.components.SmartBottomNavigationBar
+import com.example.views.ui.components.ScrollAwareBottomNavigationBar
 import com.example.views.ui.components.BottomNavDestinations
 import com.example.views.ui.components.ModernSidebar
 import com.example.views.ui.components.ModernSearchBar
 import com.example.views.ui.components.ModernNoteCard
 import com.example.views.ui.components.NoteCard
 import com.example.views.viewmodel.DashboardViewModel
+import com.example.views.viewmodel.AuthViewModel
+import com.example.views.viewmodel.RelayManagementViewModel
+import com.example.views.repository.RelayRepository
 import com.example.views.ui.performance.animatedYOffset
 import java.text.SimpleDateFormat
 import java.util.*
@@ -67,26 +74,87 @@ fun DashboardScreen(
     onScrollToTop: () -> Unit = {},
     listState: LazyListState = rememberLazyListState(),
     viewModel: DashboardViewModel = viewModel(),
+    accountStateViewModel: com.example.views.viewmodel.AccountStateViewModel = viewModel(),
+    relayRepository: RelayRepository? = null,
+    onLoginClick: (() -> Unit)? = null,
+    onTopAppBarStateChange: (TopAppBarState) -> Unit = {},
+    initialTopAppBarState: TopAppBarState? = null,
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val authState by accountStateViewModel.authState.collectAsState()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     
+    // Relay management
+    val relayViewModel: RelayManagementViewModel? = relayRepository?.let { 
+        viewModel { RelayManagementViewModel(it) } 
+    }
+    val relayUiState = if (relayViewModel != null) {
+        relayViewModel.uiState.collectAsState().value
+    } else {
+        com.example.views.viewmodel.RelayManagementUiState()
+    }
+
     // Search state - using simple String instead of TextFieldValue
     var searchQuery by remember { mutableStateOf("") }
-    
+
     // Pull-to-refresh state
     var isRefreshing by remember { mutableStateOf(false) }
+
+    // Feed view state
+    var currentFeedView by remember { mutableStateOf("Home") }
+
+    // Account switcher state
+    var showAccountSwitcher by remember { mutableStateOf(false) }
     
+    // Zap menu state - shared across all note cards
+    var shouldCloseZapMenus by remember { mutableStateOf(false) }
+    
+    // Zap configuration dialog state
+    var showZapConfigDialog by remember { mutableStateOf(false) }
+    var showWalletConnectDialog by remember { mutableStateOf(false) }
+
+    // Close zap menus when feed scroll starts (not during scroll)
+    var wasScrolling by remember { mutableStateOf(false) }
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress && !wasScrolling) {
+            // Scroll just started - close zap menus immediately
+            shouldCloseZapMenus = true
+            kotlinx.coroutines.delay(100)
+            shouldCloseZapMenus = false
+        }
+        wasScrolling = listState.isScrollInProgress
+    }
+
     // Use Material3's built-in scroll behavior for top app bar
-    val topAppBarState = rememberTopAppBarState()
+    // Inherit state from thread view when navigating back
+    val topAppBarState = rememberTopAppBarState(
+        initialHeightOffsetLimit = initialTopAppBarState?.heightOffsetLimit ?: 0f,
+        initialHeightOffset = initialTopAppBarState?.heightOffset ?: 0f,
+        initialContentOffset = initialTopAppBarState?.contentOffset ?: 0f
+    )
     val scrollBehavior = if (isSearchMode) {
         TopAppBarDefaults.pinnedScrollBehavior(topAppBarState)
     } else {
         TopAppBarDefaults.enterAlwaysScrollBehavior(topAppBarState)
     }
-    
+
+    // Simple navigation bar visibility - always visible for now
+    var isBottomNavVisible by remember { mutableStateOf(true) }
+
+    // Calculate total notification count for badge
+    val totalNotificationCount = remember {
+        // In a real app, this would come from a notification service
+        // For now, we'll use a sample count
+        6 // This matches the sample notifications we created
+    }
+
+    // Notify parent of TopAppBarState changes for thread view inheritance
+    LaunchedEffect(topAppBarState) {
+        onTopAppBarStateChange(topAppBarState)
+    }
+
     // ✅ PERFORMANCE: Optimized search filtering (Thread view pattern)
     val searchResults by remember(searchQuery) {
         derivedStateOf {
@@ -102,22 +170,38 @@ fun DashboardScreen(
             }
         }
     }
-    
+
     // ✅ Performance: Cache divider color (don't recreate on every item)
     val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
-    
+
     val uriHandler = LocalUriHandler.current
-    
+
     ModernSidebar(
         drawerState = drawerState,
-        onItemClick = { itemId -> 
+        onItemClick = { itemId ->
             when (itemId) {
-                "bug_report" -> {
-                    uriHandler.openUri("https://github.com/TekkadanPlays/ribbit-android/issues")
+                "user_profile" -> {
+                    onNavigateTo("user_profile")
+                }
+                "relays" -> {
+                    onNavigateTo("relays")
+                }
+                "login" -> {
+                    onLoginClick?.invoke()
+                }
+                "logout" -> {
+                    // Handle logout - for now just navigate to settings
+                    // In real app, this would call authViewModel.logout()
+                    onNavigateTo("settings")
+                }
+                "settings" -> {
+                    onNavigateTo("settings")
                 }
                 else -> viewModel.onSidebarItemClick(itemId)
             }
         },
+        authState = authState,
+        relays = relayUiState.relays,
         modifier = modifier
     ) {
         Scaffold(
@@ -140,26 +224,26 @@ fun DashboardScreen(
                             searchQuery = ""
                         },
                         active = isSearchMode,
-                        onActiveChange = { active -> 
+                        onActiveChange = { active ->
                             if (!active) {
                                 onSearchModeChange(false)
                                 searchQuery = ""
                             }
                         },
-                        onBackClick = { 
+                        onBackClick = {
                             searchQuery = ""
-                            onSearchModeChange(false) 
+                            onSearchModeChange(false)
                         },
                         placeholder = { Text("Search notes, users, hashtags...") }
                     )
                 } else {
                     // Normal mode - show scrollable header
                     AdaptiveHeader(
-                        title = "Ribbit",
+                        title = "ribbit",
                         isSearchMode = false,
                         searchQuery = androidx.compose.ui.text.input.TextFieldValue(""),
                         onSearchQueryChange = { },
-                        onMenuClick = { 
+                        onMenuClick = {
                             scope.launch {
                                 if (drawerState.isClosed) {
                                     drawerState.open()
@@ -179,40 +263,72 @@ fun DashboardScreen(
                         },
                         onBackClick = { },
                         onClearSearch = { },
-                        scrollBehavior = scrollBehavior
+                        onLoginClick = onLoginClick,
+                        onProfileClick = {
+                            // Navigate to user's own profile
+                            onNavigateTo("user_profile")
+                        },
+                        onAccountsClick = {
+                            // Show account switcher
+                            showAccountSwitcher = true
+                        },
+                        onSettingsClick = {
+                            // Navigate to settings
+                            onNavigateTo("settings")
+                        },
+                        isGuest = authState.isGuest,
+                        userDisplayName = authState.userProfile?.displayName ?: authState.userProfile?.name,
+                        userAvatarUrl = authState.userProfile?.picture,
+                        scrollBehavior = scrollBehavior,
+                        currentFeedView = currentFeedView,
+                        onFeedViewChange = { newFeedView -> currentFeedView = newFeedView }
                     )
                 }
             },
             bottomBar = {
                 if (!isSearchMode) {
-                    // ✅ BLACK BACKGROUND: Space beneath home bar should be black
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color.Black)
-                    ) {
-                        BottomNavigationBar(
-                            currentDestination = "home",
-                            onDestinationClick = { destination -> 
-                                when (destination) {
-                                    "home" -> {
-                                        scope.launch {
-                                            topAppBarState.heightOffset = 0f
-                                            // ✅ Performance: Use scrollToItem for instant jump (no animation overhead)
-                                            // If already at top, this is virtually free
-                                            listState.scrollToItem(0)
-                                        }
+                    ScrollAwareBottomNavigationBar(
+                        currentDestination = "home",
+                        isVisible = isBottomNavVisible,
+                        notificationCount = totalNotificationCount,
+                        topAppBarState = topAppBarState,
+                        onDestinationClick = { destination ->
+                            when (destination) {
+                                "home" -> {
+                                    scope.launch {
+                                        topAppBarState.heightOffset = 0f
+                                        // ✅ Performance: Use scrollToItem for instant jump (no animation overhead)
+                                        // If already at top, this is virtually free
+                                        listState.scrollToItem(0)
                                     }
-                                    "search" -> onSearchModeChange(true)
-                                    "profile" -> onNavigateTo("user_profile")
-                                    else -> { /* Other destinations not implemented yet */ }
                                 }
+                                "messages" -> onNavigateTo("messages")
+                                "relays" -> onNavigateTo("relays")
+                                "wallet" -> onNavigateTo("wallet")
+                                "notifications" -> onNavigateTo("notifications")
+                                else -> { /* Other destinations not implemented yet */ }
                             }
-                        )
-                    }
+                        }
+                    )
                 }
             }
         ) { paddingValues ->
+            // Calculate dynamic content padding based on navigation bar state
+            val bottomBarHeight = 72.dp // Height of the navigation bar
+            val collapsedFraction = topAppBarState.collapsedFraction
+
+            // Calculate dynamic bottom padding
+            val dynamicBottomPadding by remember(collapsedFraction) {
+                derivedStateOf {
+                    if (collapsedFraction > 0.5f) {
+                        0.dp // Remove bottom padding to expand content
+                    } else {
+                        // Gradually reduce bottom padding as navigation bar hides
+                        bottomBarHeight * (1 - collapsedFraction)
+                    }
+                }
+            }
+
             // Main content with pull-to-refresh
             PullToRefreshBox(
                 isRefreshing = isRefreshing,
@@ -226,7 +342,13 @@ fun DashboardScreen(
                 },
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(paddingValues)
+                    .consumeWindowInsets(paddingValues)
+                    .padding(
+                        start = paddingValues.calculateStartPadding(LocalLayoutDirection.current),
+                        top = paddingValues.calculateTopPadding(),
+                        end = paddingValues.calculateEndPadding(LocalLayoutDirection.current),
+                        bottom = dynamicBottomPadding
+                    )
             ) {
                 LazyColumn(
                     state = listState,
@@ -245,12 +367,44 @@ fun DashboardScreen(
                             onComment = { noteId -> onThreadClick(note) },
                             onProfileClick = onProfileClick,
                             onNoteClick = onThreadClick,
+                            onZapSettings = { showZapConfigDialog = true },
+                            shouldCloseZapMenus = shouldCloseZapMenus,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
             }
         }
+    }
+
+    // Account switcher bottom sheet
+    if (showAccountSwitcher) {
+        com.example.views.ui.components.AccountSwitchBottomSheet(
+            accountStateViewModel = accountStateViewModel,
+            onDismiss = { showAccountSwitcher = false },
+            onAddAccount = {
+                showAccountSwitcher = false
+                onLoginClick?.invoke()
+            }
+        )
+    }
+
+    // Zap configuration dialog
+    if (showZapConfigDialog) {
+        com.example.views.ui.components.ZapConfigurationDialog(
+            onDismiss = { showZapConfigDialog = false },
+            onOpenWalletSettings = { 
+                showZapConfigDialog = false
+                showWalletConnectDialog = true
+            }
+        )
+    }
+
+    // Wallet Connect dialog
+    if (showWalletConnectDialog) {
+        com.example.views.ui.components.WalletConnectDialog(
+            onDismiss = { showWalletConnectDialog = false }
+        )
     }
 }
 

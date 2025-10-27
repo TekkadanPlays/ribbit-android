@@ -22,6 +22,8 @@ fun AppHeader(
     onSearchClick: () -> Unit = {},
     onNotificationsClick: () -> Unit = {},
     onMoreOptionClick: (String) -> Unit = {},
+    onLoginClick: (() -> Unit)? = null,
+    isGuest: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -86,6 +88,19 @@ fun AppHeader(
                     expanded = expanded,
                     onDismissRequest = { expanded = false }
                 ) {
+                    // Show login option only for guests
+                    if (isGuest && onLoginClick != null) {
+                        DropdownMenuItem(
+                            text = { Text("Log In") },
+                            leadingIcon = { Icon(Icons.Outlined.Login, contentDescription = null) },
+                            onClick = { 
+                                onLoginClick()
+                                expanded = false
+                            }
+                        )
+                        HorizontalDivider()
+                    }
+                    
                     DropdownMenuItem(
                         text = { Text("Settings") },
                         leadingIcon = { Icon(Icons.Outlined.Settings, contentDescription = null) },

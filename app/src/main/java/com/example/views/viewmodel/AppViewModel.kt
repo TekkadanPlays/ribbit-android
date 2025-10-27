@@ -23,7 +23,10 @@ data class AppState(
     val threadExpandedControls: String? = null,
     val feedScrollPosition: Int = 0,
     val profileScrollPosition: Int = 0,
-    val userProfileScrollPosition: Int = 0
+    val userProfileScrollPosition: Int = 0,
+    val backPressCount: Int = 0,
+    val showExitSnackbar: Boolean = false,
+    val isExitWindowActive: Boolean = false
 )
 
 class AppViewModel : ViewModel() {
@@ -78,8 +81,49 @@ class AppViewModel : ViewModel() {
         _appState.value = _appState.value.copy(userProfileScrollPosition = position)
     }
 
+    fun updateBackPressCount(count: Int) {
+        _appState.value = _appState.value.copy(backPressCount = count)
+    }
+
+    fun updateShowExitSnackbar(show: Boolean) {
+        _appState.value = _appState.value.copy(showExitSnackbar = show)
+    }
+
+    fun updateExitWindowActive(isActive: Boolean) {
+        _appState.value = _appState.value.copy(isExitWindowActive = isActive)
+    }
+
     fun resetToDashboard() {
         _appState.value = AppState()
+    }
+
+    fun handleAppExit(): Boolean {
+        val currentState = _appState.value
+        return if (currentState.currentScreen == "dashboard") {
+            if (!currentState.isExitWindowActive) {
+                // First back press - show snackbar and start 3-second window
+                updateBackPressCount(1)
+                updateShowExitSnackbar(true)
+                updateExitWindowActive(true)
+                
+                // Start 3-second timeout to reset exit window
+                viewModelScope.launch {
+                    kotlinx.coroutines.delay(3000) // 3 seconds
+                    updateExitWindowActive(false)
+                    updateBackPressCount(0)
+                    updateShowExitSnackbar(false) // Dismiss snackbar when window expires
+                }
+                
+                false // Don't exit yet
+            } else {
+                // Second back press within 3-second window - exit
+                true
+            }
+        } else {
+            // Not on dashboard - handle normal navigation
+            navigateBack()
+            false
+        }
     }
 
     fun navigateBack(): String {

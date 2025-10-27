@@ -50,8 +50,8 @@ enum class BottomNavDestinations(
     val icon: ImageVector
 ) {
     HOME("home", "Home", Icons.Default.Home),
-    SEARCH("search", "Search", Icons.Default.Search),
-    LISTS("lists", "Lists", Icons.Default.List),
     MESSAGES("messages", "Messages", Icons.Default.Email),
-    PROFILE("profile", "Profile", Icons.Default.Person)
+    RELAYS("relays", "Relays", Icons.Default.Router),
+    WALLET("wallet", "Wallet", Icons.Default.AccountBalanceWallet),
+    NOTIFICATIONS("notifications", "Notifications", Icons.Default.Notifications)
 }

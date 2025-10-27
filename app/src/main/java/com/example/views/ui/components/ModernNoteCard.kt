@@ -2,8 +2,13 @@ package com.example.views.ui.components
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -11,16 +16,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.views.data.Note
 import com.example.views.data.SampleData
-import com.example.views.ui.icons.ArrowDownward
-import com.example.views.ui.icons.ArrowUpward
-import com.example.views.ui.icons.Bolt
-import com.example.views.ui.icons.Bookmark
-import com.example.views.ui.icons.ChatBubble
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -31,7 +32,7 @@ private val dateFormatter by lazy { SimpleDateFormat("MMM d", Locale.getDefault(
 
 /**
  * Modern Note Card following Material3 best practices.
- * 
+ *
  * Features:
  * - Interactive chip hashtags
  * - Proper elevation and theming
@@ -45,7 +46,10 @@ fun ModernNoteCard(
     onLike: (String) -> Unit = {},
     onDislike: (String) -> Unit = {},
     onBookmark: (String) -> Unit = {},
-    onZap: (String) -> Unit = {},
+    onZap: (String, Long) -> Unit = { _, _ -> },
+    onCustomZap: (String) -> Unit = {},
+    onTestZap: (String) -> Unit = {},
+    onZapSettings: () -> Unit = {},
     onShare: (String) -> Unit = {},
     onComment: (String) -> Unit = {},
     onProfileClick: (String) -> Unit = {},
@@ -53,13 +57,15 @@ fun ModernNoteCard(
     onHashtagClick: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    // Direct card content without swipe wrapper
     NoteCardContent(
         note = note,
         onLike = onLike,
         onDislike = onDislike,
         onBookmark = onBookmark,
         onZap = onZap,
+        onCustomZap = onCustomZap,
+        onTestZap = onTestZap,
+        onZapSettings = onZapSettings,
         onComment = onComment,
         onProfileClick = onProfileClick,
         onNoteClick = onNoteClick,
@@ -75,13 +81,17 @@ private fun NoteCardContent(
     onLike: (String) -> Unit,
     onDislike: (String) -> Unit,
     onBookmark: (String) -> Unit,
-    onZap: (String) -> Unit,
+    onZap: (String, Long) -> Unit,
+    onCustomZap: (String) -> Unit,
+    onTestZap: (String) -> Unit,
+    onZapSettings: () -> Unit,
     onComment: (String) -> Unit,
     onProfileClick: (String) -> Unit,
     onNoteClick: (Note) -> Unit,
     onHashtagClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var isZapMenuExpanded by remember { mutableStateOf(false) }
     ElevatedCard(
         modifier = modifier
             .fillMaxWidth()
@@ -111,9 +121,9 @@ private fun NoteCardContent(
                     size = 40.dp,
                     onClick = { onProfileClick(note.author.id) }
                 )
-                
+
                 Spacer(modifier = Modifier.width(12.dp))
-                
+
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -125,7 +135,7 @@ private fun NoteCardContent(
                         if (note.author.isVerified) {
                             Spacer(modifier = Modifier.width(4.dp))
                             Icon(
-                                imageVector = Icons.Default.Star,
+                                imageVector = Icons.Filled.Star,
                                 contentDescription = "Verified",
                                 modifier = Modifier.size(16.dp),
                                 tint = MaterialTheme.colorScheme.primary
@@ -150,16 +160,36 @@ private fun NoteCardContent(
                     )
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             // Content
             Text(
                 text = note.content,
                 style = MaterialTheme.typography.bodyLarge,
                 lineHeight = 20.sp
             )
-            
+
+            // URL Previews
+            if (note.urlPreviews.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    note.urlPreviews.forEach { previewInfo ->
+                        UrlPreviewCard(
+                            previewInfo = previewInfo,
+                            onUrlClick = { url ->
+                                // Handle URL click - could open in browser
+                            },
+                            onUrlLongClick = { url ->
+                                // Handle URL long click - could show context menu
+                            }
+                        )
+                    }
+                }
+            }
+
             // Hashtags as chips
             if (note.hashtags.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
@@ -191,9 +221,9 @@ private fun NoteCardContent(
                     }
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             // Action buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -211,7 +241,7 @@ private fun NoteCardContent(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-                
+
                 IconButton(
                     onClick = { onDislike(note.id) },
                     modifier = Modifier.size(40.dp)
@@ -223,7 +253,7 @@ private fun NoteCardContent(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-                
+
                 IconButton(
                     onClick = { onBookmark(note.id) },
                     modifier = Modifier.size(40.dp)
@@ -235,7 +265,7 @@ private fun NoteCardContent(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-                
+
                 IconButton(
                     onClick = { onComment(note.id) },
                     modifier = Modifier.size(40.dp)
@@ -247,25 +277,36 @@ private fun NoteCardContent(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-                
+
+                // Zap button - simple square icon like others
                 IconButton(
-                    onClick = { onZap(note.id) },
+                    onClick = { isZapMenuExpanded = !isZapMenuExpanded },
                     modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.Bolt,
+                        imageVector = Icons.Filled.Bolt,
                         contentDescription = "Zap",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
                 }
-                
+
                 // Isolate menu state to prevent card recomposition
                 NoteMoreOptionsMenu(
                     onShare = { onNoteClick(note) },
                     onReport = { /* Handle report */ }
                 )
             }
+
+            // Zap menu - completely separate, appears below action buttons
+            ZapMenuRow(
+                isExpanded = isZapMenuExpanded,
+                onExpandedChange = { isZapMenuExpanded = it },
+                onZap = { amount -> onZap(note.id, amount) },
+                onCustomZap = { onCustomZap(note.id) },
+                onTestZap = { onTestZap(note.id) },
+                onSettingsClick = onZapSettings
+            )
         }
     }
 }
@@ -277,7 +318,7 @@ private fun NoteMoreOptionsMenu(
     modifier: Modifier = Modifier
 ) {
     var showMenu by remember { mutableStateOf(false) }
-    
+
     Box(modifier = modifier) {
         IconButton(
             onClick = { showMenu = true },
@@ -290,7 +331,7 @@ private fun NoteMoreOptionsMenu(
                 modifier = Modifier.size(20.dp)
             )
         }
-        
+
         DropdownMenu(
             expanded = showMenu,
             onDismissRequest = { showMenu = false }
@@ -298,21 +339,21 @@ private fun NoteMoreOptionsMenu(
             DropdownMenuItem(
                 text = { Text("Share") },
                 onClick = {
-                    onShare()
                     showMenu = false
+                    onShare()
                 },
                 leadingIcon = {
-                    Icon(Icons.Default.Share, contentDescription = null)
+                    Icon(Icons.Filled.Send, contentDescription = null)
                 }
             )
             DropdownMenuItem(
                 text = { Text("Report") },
                 onClick = {
-                    onReport()
                     showMenu = false
+                    onReport()
                 },
                 leadingIcon = {
-                    Icon(Icons.Default.Report, contentDescription = null)
+                    Icon(Icons.Filled.Flag, contentDescription = null)
                 }
             )
         }
@@ -322,7 +363,7 @@ private fun NoteMoreOptionsMenu(
 private fun formatTimestamp(timestamp: Long): String {
     val now = System.currentTimeMillis()
     val diff = now - timestamp
-    
+
     return when {
         diff < TimeUnit.MINUTES.toMillis(1) -> "now"
         diff < TimeUnit.HOURS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toMinutes(diff)}m"
@@ -338,4 +379,3 @@ fun ModernNoteCardPreview() {
         ModernNoteCard(note = SampleData.sampleNotes[0])
     }
 }
-
