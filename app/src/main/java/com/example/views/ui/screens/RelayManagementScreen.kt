@@ -3,6 +3,7 @@ package com.example.views.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
@@ -10,6 +11,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -49,13 +51,24 @@ import coil.request.ImageRequest
 import com.example.views.data.UserRelay
 import com.example.views.data.RelayHealth
 import com.example.views.data.RelayConnectionStatus
+import com.example.views.data.RelayCategory
+import com.example.views.data.DefaultRelayCategories
 import com.example.views.repository.RelayRepository
+import com.example.views.repository.RelayStorageManager
 import com.example.views.viewmodel.RelayManagementViewModel
+import com.example.views.viewmodel.AccountStateViewModel
 import kotlinx.coroutines.launch
+import androidx.compose.ui.platform.LocalContext
 
 // Helper function to normalize relay URL (remove trailing slash)
 private fun normalizeRelayUrl(url: String): String {
-    return url.trim().removeSuffix("/")
+    val trimmed = url.trim().removeSuffix("/")
+    return when {
+        trimmed.startsWith("wss://") || trimmed.startsWith("ws://") -> trimmed
+        trimmed.startsWith("https://") -> trimmed.replace("https://", "wss://")
+        trimmed.startsWith("http://") -> trimmed.replace("http://", "ws://")
+        else -> "wss://$trimmed"
+    }
 }
 
 // Helper function to check for duplicates in a category
@@ -73,7 +86,7 @@ private fun createRelayWithNip11Info(
 ): UserRelay {
     val normalizedUrl = normalizeRelayUrl(url)
     val cachedInfo = nip11CacheManager.getCachedRelayInfo(normalizedUrl)
-    
+
     return UserRelay(
         url = normalizedUrl,
         read = read,
@@ -90,38 +103,58 @@ private fun createRelayWithNip11Info(
 fun RelayManagementScreen(
     onBackClick: () -> Unit,
     relayRepository: RelayRepository,
+    accountStateViewModel: AccountStateViewModel,
+    topAppBarState: TopAppBarState = rememberTopAppBarState(),
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val nip11CacheManager = relayRepository.getNip11CacheManager()
+    val storageManager = remember { RelayStorageManager(context) }
+
     val viewModel: RelayManagementViewModel = viewModel {
-        RelayManagementViewModel(relayRepository)
+        RelayManagementViewModel(relayRepository, storageManager)
     }
-    
+
     val uiState by viewModel.uiState.collectAsState()
-    
+    val currentAccount by accountStateViewModel.currentAccount.collectAsState()
+
+    // Load user relays when screen opens or user changes
+    LaunchedEffect(currentAccount) {
+        currentAccount?.toHexKey()?.let { pubkey ->
+            viewModel.loadUserRelays(pubkey)
+        }
+    }
+
     // Tab state with pager
     val pagerState = rememberPagerState(pageCount = { 2 })
     val selectedTab by remember { derivedStateOf { pagerState.currentPage } }
     val coroutineScope = rememberCoroutineScope()
-    
-    // General tab relay state
-    var generalRelayUrl by remember { mutableStateOf("") }
-    
-    // Personal tab relay states - each category has its own list
+
+    // General tab - Category management state (from ViewModel)
+    val relayCategories by viewModel.relayCategories.collectAsState()
+    var newCategoryName by remember { mutableStateOf("") }
+    var editingCategoryId by remember { mutableStateOf<String?>(null) }
+    var editingCategoryName by remember { mutableStateOf("") }
+
+    // Category-specific states (for add relay inputs)
+    var categoryRelayInputs by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var categoryInputVisibility by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    var categoryExpanded by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+
+    // Personal tab relay states - get from ViewModel
+    val outboxRelays by remember { derivedStateOf { uiState.outboxRelays } }
+    val inboxRelays by remember { derivedStateOf { uiState.inboxRelays } }
+    val cacheRelays by remember { derivedStateOf { uiState.cacheRelays } }
+
     var outboxRelayUrl by remember { mutableStateOf("") }
     var inboxRelayUrl by remember { mutableStateOf("") }
     var cacheRelayUrl by remember { mutableStateOf("") }
-    
+
     // Input field visibility state
     var showOutboxInput by remember { mutableStateOf(false) }
     var showInboxInput by remember { mutableStateOf(false) }
     var showCacheInput by remember { mutableStateOf(false) }
-    
-    // Separate relay lists for each category
-    var outboxRelays by remember { mutableStateOf<List<UserRelay>>(emptyList()) }
-    var inboxRelays by remember { mutableStateOf<List<UserRelay>>(emptyList()) }
-    var cacheRelays by remember { mutableStateOf<List<UserRelay>>(emptyList()) }
-    
+
     // Toast and dialog state
     var showToast by remember { mutableStateOf(false) }
     var toastMessage by remember { mutableStateOf("") }
@@ -129,12 +162,17 @@ fun RelayManagementScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
-    
+
+    // Scroll behavior for collapsible top bar
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(topAppBarState)
+
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { 
+                scrollBehavior = scrollBehavior,
+                title = {
                     Text(
                         text = "relays",
                         fontWeight = FontWeight.Bold
@@ -191,7 +229,7 @@ fun RelayManagementScreen(
                             text = { Text("Personal") }
                         )
                     }
-                    
+
                     // Tab Content with HorizontalPager
                     HorizontalPager(
                         state = pagerState,
@@ -199,57 +237,111 @@ fun RelayManagementScreen(
                     ) { page ->
                         when (page) {
                             0 -> {
-                    // General Tab
+                    // General Tab - Category Management
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                     ) {
-                        RelayAddSection(
-                            relayUrl = generalRelayUrl,
-                            onRelayUrlChange = { generalRelayUrl = it },
-                            onAddRelay = {
-                                if (generalRelayUrl.isNotBlank()) {
-                                    val normalizedUrl = normalizeRelayUrl(generalRelayUrl)
-                                    if (isDuplicateRelay(normalizedUrl, uiState.relays)) {
-                                        toastMessage = "${normalizedUrl} already exists in General Relays"
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Display all categories
+                        relayCategories.forEach { category ->
+                            RelayCategorySection(
+                                category = category,
+                                relayUrl = categoryRelayInputs[category.id] ?: "",
+                                onRelayUrlChange = { newUrl ->
+                                    categoryRelayInputs = categoryRelayInputs + (category.id to newUrl)
+                                },
+                                showInput = categoryInputVisibility[category.id] ?: false,
+                                onToggleInput = {
+                                    val isCurrentlyShowing = categoryInputVisibility[category.id] ?: false
+                                    // Close all inputs first
+                                    categoryInputVisibility = categoryInputVisibility.mapValues { false }
+                                    // If it was closed, open it; if it was open, keep it closed
+                                    if (!isCurrentlyShowing) {
+                                        categoryInputVisibility = categoryInputVisibility + (category.id to true)
+                                    }
+                                },
+                                onAddRelay = { url ->
+                                    val normalizedUrl = normalizeRelayUrl(url)
+                                    if (isDuplicateRelay(normalizedUrl, category.relays)) {
+                                        toastMessage = "${normalizedUrl} already exists in ${category.name}"
                                         showToast = true
                                     } else {
-                                        viewModel.addRelay(normalizedUrl, true, true)
-                                        generalRelayUrl = ""
+                                        val newRelay = createRelayWithNip11Info(
+                                            url = normalizedUrl,
+                                            read = true,
+                                            write = true,
+                                            nip11CacheManager = nip11CacheManager
+                                        )
+                                        viewModel.addRelayToCategory(category.id, newRelay)
+                                        categoryRelayInputs = categoryRelayInputs + (category.id to "")
+                                        categoryInputVisibility = categoryInputVisibility + (category.id to false)
                                     }
+                                },
+                                onRemoveRelay = { relay ->
+                                    viewModel.removeRelayFromCategory(category.id, relay.url)
+                                },
+                                onRenameCategory = { newName ->
+                                    if (newName.isNotBlank()) {
+                                        val updatedCategory = category.copy(name = newName)
+                                        viewModel.updateCategory(category.id, updatedCategory)
+                                        editingCategoryId = null
+                                    }
+                                },
+                                onDeleteCategory = {
+                                    viewModel.deleteCategory(category.id)
+                                },
+                                isEditing = editingCategoryId == category.id,
+                                onStartEditing = {
+                                    editingCategoryId = category.id
+                                    editingCategoryName = category.name
+                                },
+                                editingName = editingCategoryName,
+                                onEditingNameChange = { editingCategoryName = it },
+                                isLoading = uiState.isLoading,
+                                isExpanded = categoryExpanded[category.id] ?: false,
+                                onExpandToggle = {
+                                    categoryExpanded = categoryExpanded + (category.id to !(categoryExpanded[category.id] ?: false))
+                                },
+                                onSetFavorite = { categoryId ->
+                                    viewModel.setFavoriteCategory(categoryId)
                                 }
-                            },
-                            isLoading = uiState.isLoading,
-                            placeholder = "relay.example.com"
-                        )
-                        
-                        if (uiState.relays.isNotEmpty()) {
+                            )
+
                             HorizontalDivider(
-                                thickness = 1.dp, 
+                                thickness = 1.dp,
                                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
                             )
-                            
-                            // Relays List
-                            uiState.relays.forEachIndexed { index, relay ->
-                                RelaySettingsItem(
-                                    relay = relay,
-                                    connectionStatus = uiState.connectionStatus[relay.url] ?: RelayConnectionStatus.DISCONNECTED,
-                                    onRemove = { viewModel.removeRelay(relay.url) },
-                                    onRefresh = { viewModel.refreshRelayInfo(relay.url) },
-                                    onTestConnection = { viewModel.testRelayConnection(relay.url) }
-                                )
-                                
-                                // Only add divider if not the last item
-                                if (index < uiState.relays.size - 1) {
-                                    HorizontalDivider(
-                                        thickness = 1.dp, 
-                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
-                                    )
-                                }
-                            }
                         }
-                        
+
+                        // "Add New Category" button at bottom
+                        Button(
+                            onClick = {
+                                if (newCategoryName.isBlank()) {
+                                    newCategoryName = "New Category"
+                                }
+                                val newCategory = RelayCategory(
+                                    name = newCategoryName,
+                                    relays = emptyList()
+                                )
+                                viewModel.addCategory(newCategory)
+                                newCategoryName = ""
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Add Category",
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Add New Category")
+                        }
+
                         Spacer(modifier = Modifier.height(16.dp))
                     }
                 }
@@ -263,14 +355,14 @@ fun RelayManagementScreen(
                     ) {
                         // Add consistent top spacing
                         Spacer(modifier = Modifier.height(8.dp))
-                        
+
                         // Outbox Relays
                         RelayCategorySectionWithAddButton(
                             title = "Outbox Relays",
                             description = "Relays for publishing your notes",
                             relays = outboxRelays,
                             onRemoveRelay = { url ->
-                                outboxRelays = outboxRelays.filter { it.url != url }
+                                viewModel.removeOutboxRelay(url)
                             },
                             showInput = showOutboxInput,
                             onToggleInput = { showOutboxInput = !showOutboxInput },
@@ -289,43 +381,28 @@ fun RelayManagementScreen(
                                             write = true,
                                             nip11CacheManager = nip11CacheManager
                                         )
-                                        outboxRelays = outboxRelays + newRelay
+                                        viewModel.addOutboxRelay(newRelay)
                                         outboxRelayUrl = ""
                                         showOutboxInput = false
-                                        
-                                        // Fetch fresh NIP-11 info in background if not cached
-                                        if (newRelay.info == null) {
-                                            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                                                val freshInfo = nip11CacheManager.getRelayInfo(normalizedUrl, forceRefresh = true)
-                                                if (freshInfo != null) {
-                                                    val updatedRelay = newRelay.copy(
-                                                        info = freshInfo,
-                                                        isOnline = true,
-                                                        lastChecked = System.currentTimeMillis()
-                                                    )
-                                                    outboxRelays = outboxRelays.map { if (it.url == normalizedUrl) updatedRelay else it }
-                                                }
-                                            }
-                                        }
                                     }
                                 }
                             },
                             isLoading = uiState.isLoading
                         )
-                        
+
                         HorizontalDivider(
-                            thickness = 1.dp, 
+                            thickness = 1.dp,
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
-                        
+
                         // Inbox Relays
                         RelayCategorySectionWithAddButton(
                             title = "Inbox Relays",
                             description = "Relays for receiving notes from others",
                             relays = inboxRelays,
                             onRemoveRelay = { url ->
-                                inboxRelays = inboxRelays.filter { it.url != url }
+                                viewModel.removeInboxRelay(url)
                             },
                             showInput = showInboxInput,
                             onToggleInput = { showInboxInput = !showInboxInput },
@@ -344,43 +421,28 @@ fun RelayManagementScreen(
                                             write = true,
                                             nip11CacheManager = nip11CacheManager
                                         )
-                                        inboxRelays = inboxRelays + newRelay
+                                        viewModel.addInboxRelay(newRelay)
                                         inboxRelayUrl = ""
                                         showInboxInput = false
-                                        
-                                        // Fetch fresh NIP-11 info in background if not cached
-                                        if (newRelay.info == null) {
-                                            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                                                val freshInfo = nip11CacheManager.getRelayInfo(normalizedUrl, forceRefresh = true)
-                                                if (freshInfo != null) {
-                                                    val updatedRelay = newRelay.copy(
-                                                        info = freshInfo,
-                                                        isOnline = true,
-                                                        lastChecked = System.currentTimeMillis()
-                                                    )
-                                                    inboxRelays = inboxRelays.map { if (it.url == normalizedUrl) updatedRelay else it }
-                                                }
-                                            }
-                                        }
                                     }
                                 }
                             },
                             isLoading = uiState.isLoading
                         )
-                        
+
                         HorizontalDivider(
-                            thickness = 1.dp, 
+                            thickness = 1.dp,
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
-                        
+
                         // Cache Relays
                         RelayCategorySectionWithAddButton(
                             title = "Cache Relays",
                             description = "Relays for caching and backup",
                             relays = cacheRelays,
                             onRemoveRelay = { url ->
-                                cacheRelays = cacheRelays.filter { it.url != url }
+                                viewModel.removeCacheRelay(url)
                             },
                             showInput = showCacheInput,
                             onToggleInput = { showCacheInput = !showCacheInput },
@@ -399,24 +461,9 @@ fun RelayManagementScreen(
                                             write = true,
                                             nip11CacheManager = nip11CacheManager
                                         )
-                                        cacheRelays = cacheRelays + newRelay
+                                        viewModel.addCacheRelay(newRelay)
                                         cacheRelayUrl = ""
                                         showCacheInput = false
-                                        
-                                        // Fetch fresh NIP-11 info in background if not cached
-                                        if (newRelay.info == null) {
-                                            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                                                val freshInfo = nip11CacheManager.getRelayInfo(normalizedUrl, forceRefresh = true)
-                                                if (freshInfo != null) {
-                                                    val updatedRelay = newRelay.copy(
-                                                        info = freshInfo,
-                                                        isOnline = true,
-                                                        lastChecked = System.currentTimeMillis()
-                                                    )
-                                                    cacheRelays = cacheRelays.map { if (it.url == normalizedUrl) updatedRelay else it }
-                                                }
-                                            }
-                                        }
                                     }
                                 }
                             },
@@ -431,7 +478,7 @@ fun RelayManagementScreen(
                             },
                             isLoading = uiState.isLoading
                         )
-                        
+
                         // Add consistent bottom spacing
                         Spacer(modifier = Modifier.height(8.dp))
                     }
@@ -440,7 +487,7 @@ fun RelayManagementScreen(
             }
         }
     }
-    
+
     // Snackbar for toast messages
     LaunchedEffect(showToast) {
         if (showToast) {
@@ -448,7 +495,7 @@ fun RelayManagementScreen(
             showToast = false
         }
     }
-    
+
     // Confirmation dialog for adding default relay
     if (showDefaultConfirmation) {
         AlertDialog(
@@ -464,7 +511,7 @@ fun RelayManagementScreen(
                             write = true,
                             nip11CacheManager = nip11CacheManager
                         )
-                        cacheRelays = cacheRelays + defaultRelay
+                        viewModel.addCacheRelay(defaultRelay)
                         showDefaultConfirmation = false
                     }
                 ) {
@@ -492,7 +539,7 @@ private fun RelayAddSection(
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    
+
     Column(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
@@ -560,7 +607,7 @@ private fun RelayAddSectionNoPadding(
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    
+
     Column(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
@@ -652,16 +699,16 @@ private fun RelayCategorySectionWithAddButton(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                
+
                 Spacer(modifier = Modifier.height(4.dp))
-                
+
                 Text(
                     text = description,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            
+
             // Add button
             Row {
                 // Default button (only for cache relays)
@@ -674,7 +721,7 @@ private fun RelayCategorySectionWithAddButton(
                         Text("Default")
                     }
                 }
-                
+
                 // Add button
                 IconButton(
                     onClick = onToggleInput,
@@ -687,7 +734,7 @@ private fun RelayCategorySectionWithAddButton(
                 }
             }
         }
-        
+
         // Relay Input (shown/hidden based on state)
         if (showInput) {
             RelayAddSectionNoPadding(
@@ -701,16 +748,16 @@ private fun RelayCategorySectionWithAddButton(
                 placeholder = "relay.example.com"
             )
         }
-        
+
         // Add spacing below input when no relays are listed
         if (relays.isEmpty() && !showInput) {
             Spacer(modifier = Modifier.height(16.dp))
         }
-        
+
         // Relay List
         if (relays.isNotEmpty()) {
             Spacer(modifier = Modifier.height(12.dp))
-            
+
             relays.forEachIndexed { index, relay ->
                 RelaySettingsItem(
                     relay = relay,
@@ -719,11 +766,11 @@ private fun RelayCategorySectionWithAddButton(
                     onRefresh = { /* TODO: Implement refresh for category relays */ },
                     onTestConnection = { /* TODO: Implement test for category relays */ }
                 )
-                
+
                 // Only add divider if not the last item
                 if (index < relays.size - 1) {
                     HorizontalDivider(
-                        thickness = 1.dp, 
+                        thickness = 1.dp,
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
                     )
                 }
@@ -763,16 +810,16 @@ private fun RelayCategorySection(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                
+
                 Spacer(modifier = Modifier.height(4.dp))
-                
+
                 Text(
                     text = description,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            
+
             // Default button (only for cache relays)
             onAddDefault?.let { addDefault ->
                 OutlinedButton(
@@ -784,9 +831,9 @@ private fun RelayCategorySection(
                 }
             }
         }
-        
+
         Spacer(modifier = Modifier.height(12.dp))
-        
+
         // Relay Input
         RelayAddSectionNoPadding(
             relayUrl = relayUrl,
@@ -797,16 +844,16 @@ private fun RelayCategorySection(
             focusRequester = focusRequester,
             onFocusChanged = onFocusChanged
         )
-        
+
         // Add spacing below input when no relays are listed
         if (relays.isEmpty()) {
             Spacer(modifier = Modifier.height(16.dp))
         }
-        
+
         // Relay List
         if (relays.isNotEmpty()) {
             Spacer(modifier = Modifier.height(12.dp))
-            
+
             relays.forEachIndexed { index, relay ->
                 RelaySettingsItem(
                     relay = relay,
@@ -815,11 +862,11 @@ private fun RelayCategorySection(
                     onRefresh = { /* TODO: Implement refresh for category relays */ },
                     onTestConnection = { /* TODO: Implement test for category relays */ }
                 )
-                
+
                 // Only add divider if not the last item
                 if (index < relays.size - 1) {
                     HorizontalDivider(
-                        thickness = 1.dp, 
+                        thickness = 1.dp,
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
                     )
                 }
@@ -838,7 +885,7 @@ private fun RelaySettingsItem(
     onTestConnection: () -> Unit
 ) {
     var showInfoSheet by remember { mutableStateOf(false) }
-    
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -871,9 +918,9 @@ private fun RelaySettingsItem(
                 }
             )
         }
-        
+
         Spacer(modifier = Modifier.width(16.dp))
-        
+
         // Relay info - just the title/URL
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -893,7 +940,7 @@ private fun RelaySettingsItem(
                 overflow = TextOverflow.Ellipsis
             )
         }
-        
+
         // Action buttons
         Row {
             IconButton(
@@ -906,7 +953,7 @@ private fun RelaySettingsItem(
                     modifier = Modifier.size(20.dp)
                 )
             }
-            
+
             IconButton(
                 onClick = onTestConnection,
                 modifier = Modifier.size(40.dp)
@@ -917,7 +964,7 @@ private fun RelaySettingsItem(
                     modifier = Modifier.size(20.dp)
                 )
             }
-            
+
             IconButton(
                 onClick = onRemove,
                 modifier = Modifier.size(40.dp)
@@ -931,7 +978,7 @@ private fun RelaySettingsItem(
             }
         }
     }
-    
+
     // Info tray
     RelayInfoTray(
         relay = relay,
@@ -980,9 +1027,9 @@ private fun RelayInfoTray(
                             )
                         }
                     }
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
+
                     // Relay name and URL
                     Text(
                         text = relay.displayName,
@@ -994,9 +1041,9 @@ private fun RelayInfoTray(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    
+
                     Spacer(modifier = Modifier.height(16.dp))
-                    
+
                     // Relay information
                     relay.description?.let { description ->
                         Column {
@@ -1014,7 +1061,7 @@ private fun RelayInfoTray(
                             Spacer(modifier = Modifier.height(12.dp))
                         }
                     }
-                    
+
                     relay.software?.let { software ->
                         Column {
                             Text(
@@ -1031,7 +1078,7 @@ private fun RelayInfoTray(
                             Spacer(modifier = Modifier.height(12.dp))
                         }
                     }
-                    
+
                     relay.info?.contact?.let { contact ->
                         Column {
                             Text(
@@ -1048,7 +1095,7 @@ private fun RelayInfoTray(
                             Spacer(modifier = Modifier.height(12.dp))
                         }
                     }
-                    
+
                     if (relay.supportedNips.isNotEmpty()) {
                         Column {
                             Text(
@@ -1063,6 +1110,180 @@ private fun RelayInfoTray(
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Category section for General tab with proper UX:
+ * - Tap category row to expand/collapse
+ * - + button expands and shows input
+ * - Pencil icon enables inline editing
+ * - Count shown as "Name (5)"
+ */
+@Composable
+private fun RelayCategorySection(
+    category: RelayCategory,
+    relayUrl: String,
+    onRelayUrlChange: (String) -> Unit,
+    showInput: Boolean,
+    onToggleInput: () -> Unit,
+    onAddRelay: (String) -> Unit,
+    onRemoveRelay: (UserRelay) -> Unit,
+    onRenameCategory: (String) -> Unit,
+    onDeleteCategory: () -> Unit,
+    isEditing: Boolean,
+    onStartEditing: () -> Unit,
+    editingName: String,
+    onEditingNameChange: (String) -> Unit,
+    isLoading: Boolean,
+    isExpanded: Boolean,
+    onExpandToggle: () -> Unit,
+    onSetFavorite: (String) -> Unit
+) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        // Category header - tap to expand/collapse
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onExpandToggle() },
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
+                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Favorite star icon
+                IconButton(
+                    onClick = { onSetFavorite(category.id) },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = if (category.isFavorite) Icons.Default.Star else Icons.Outlined.StarBorder,
+                        contentDescription = if (category.isFavorite) "Favorite" else "Set as favorite",
+                        tint = if (category.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // Name with inline editing
+                if (isEditing) {
+                    BasicTextField(
+                        value = editingName,
+                        onValueChange = onEditingNameChange,
+                        textStyle = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = { onRenameCategory(editingName) },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = "Save",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "${category.name} (${category.relays.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    // Pencil icon after count
+                    IconButton(
+                        onClick = onStartEditing,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit name",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Row {
+                // Delete button (not for default category)
+                if (!category.isDefault) {
+                    IconButton(
+                        onClick = onDeleteCategory,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+
+                // + / - button - expands category and toggles input
+                IconButton(
+                    onClick = {
+                        if (!isExpanded) onExpandToggle() // Auto-expand if needed
+                        onToggleInput() // Toggle input (will close others)
+                    },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = if (showInput) Icons.Default.Remove else Icons.Default.Add,
+                        contentDescription = if (showInput) "Hide" else "Add",
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+
+        // Expanded content (input + relays)
+        if (isExpanded) {
+            if (showInput) {
+                Spacer(modifier = Modifier.height(8.dp))
+                RelayAddSectionNoPadding(
+                    relayUrl = relayUrl,
+                    onRelayUrlChange = onRelayUrlChange,
+                    onAddRelay = { onAddRelay(relayUrl) },
+                    isLoading = isLoading,
+                    placeholder = "relay.example.com"
+                )
+            }
+
+            if (category.relays.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                category.relays.forEachIndexed { index, relay ->
+                    RelaySettingsItem(
+                        relay = relay,
+                        connectionStatus = RelayConnectionStatus.DISCONNECTED,
+                        onRemove = { onRemoveRelay(relay) },
+                        onRefresh = { },
+                        onTestConnection = { }
+                    )
+                    if (index < category.relays.size - 1) {
+                        HorizontalDivider(thickness = 1.dp)
                     }
                 }
             }
