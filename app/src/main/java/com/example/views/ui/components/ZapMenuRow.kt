@@ -11,7 +11,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
@@ -38,7 +37,6 @@ fun ZapMenuRow(
     onExpandedChange: (Boolean) -> Unit,
     onZap: (Long) -> Unit,
     onCustomZap: () -> Unit,
-    onTestZap: () -> Unit,
     onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -116,19 +114,19 @@ fun ZapMenuRow(
                     )
                 }
 
-                // Test Zap (left of Edit)
+                // Custom chip - opens custom zap dialog (same as long-press on bolt)
                 item {
                     FilterChip(
                         selected = false,
                         onClick = {
                             onExpandedChange(false)
-                            onTestZap()
+                            onCustomZap()
                         },
-                        label = { Text("TEST") },
+                        label = { Text("Custom") },
                         leadingIcon = {
                             Icon(
-                                imageVector = Icons.Filled.BugReport,
-                                contentDescription = null,
+                                imageVector = Icons.Filled.Bolt,
+                                contentDescription = "Custom amount",
                                 modifier = Modifier.size(18.dp)
                             )
                         },

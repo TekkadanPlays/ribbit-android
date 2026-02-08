@@ -21,7 +21,7 @@ data class AnnouncementsUiState(
 )
 
 class AnnouncementsViewModel : ViewModel() {
-    private val notesRepository = NotesRepository()
+    private val notesRepository = NotesRepository.getInstance()
 
     private val _uiState = MutableStateFlow(AnnouncementsUiState())
     val uiState: StateFlow<AnnouncementsUiState> = _uiState.asStateFlow()
@@ -143,7 +143,7 @@ class AnnouncementsViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                notesRepository.disconnectAll()
+                // No disconnectAll() - state machine only updates subscription (fast feed switch)
                 notesRepository.connectToRelays(listOf(relay))
                 notesRepository.subscribeToAuthorNotes(
                     relayUrls = listOf(relay),
@@ -169,7 +169,7 @@ class AnnouncementsViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                notesRepository.disconnectAll()
+                // No disconnectAll() - state machine only updates subscription (fast feed switch)
                 notesRepository.connectToRelays(listOf(relay))
                 notesRepository.subscribeToNotes(limit = 50)
             } catch (e: Exception) {
@@ -194,6 +194,6 @@ class AnnouncementsViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
-        notesRepository.disconnectAll()
+        // Do not call notesRepository.disconnectAll() - shared connection and notes outlive this screen
     }
 }

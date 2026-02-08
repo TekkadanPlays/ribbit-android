@@ -5,8 +5,11 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.automirrored.outlined.*
@@ -27,6 +30,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.offset
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import com.example.views.viewmodel.HomeSortOrder
+import com.example.views.viewmodel.TopicsSortOrder
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,6 +52,7 @@ fun AdaptiveHeader(
     onLoginClick: (() -> Unit)? = null,
     onProfileClick: () -> Unit = {},
     onAccountsClick: () -> Unit = {},
+    onQrCodeClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {},
     isGuest: Boolean = true,
     userDisplayName: String? = null,
@@ -52,12 +60,24 @@ fun AdaptiveHeader(
     scrollBehavior: TopAppBarScrollBehavior? = null,
     currentFeedView: String = "Home",
     onFeedViewChange: (String) -> Unit = {},
+    // Home feed filter: All vs Following (slide-out under title); Edit for future custom feeds
+    isFollowingFilter: Boolean = true,
+    onFollowingFilterChange: ((Boolean) -> Unit)? = null,
+    onEditFeedClick: (() -> Unit)? = null,
+    // Home sort: Latest (default) / Popular
+    homeSortOrder: HomeSortOrder = HomeSortOrder.Latest,
+    onHomeSortOrderChange: ((HomeSortOrder) -> Unit)? = null,
+    // Topics feed: All (default) / Following + Latest/Popular (when non-null)
+    isTopicsFollowingFilter: Boolean = false,
+    onTopicsFollowingFilterChange: ((Boolean) -> Unit)? = null,
+    topicsSortOrder: TopicsSortOrder = TopicsSortOrder.Latest,
+    onTopicsSortOrderChange: ((TopicsSortOrder) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    // Feed dropdown state
+    // Feed title dropdown / slide-out state (filter options)
     var feedDropdownExpanded by remember { mutableStateOf(false) }
     val rotationAngle by animateFloatAsState(
         targetValue = if (feedDropdownExpanded) 180f else 0f,
@@ -73,73 +93,73 @@ fun AdaptiveHeader(
         }
     }
 
-    TopAppBar(
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-            scrolledContainerColor = MaterialTheme.colorScheme.surface,
-            titleContentColor = MaterialTheme.colorScheme.onSurface,
-            actionIconContentColor = MaterialTheme.colorScheme.onSurface,
-            navigationIconContentColor = MaterialTheme.colorScheme.onSurface
-        ),
-        title = {
-            if (isSearchMode) {
-                // Search mode - just a simple text field
-                TextField(
-                    value = searchQuery,
-                    onValueChange = onSearchQueryChange,
-                    placeholder = {
-                        Text(
-                            "Search notes...",
-                            style = MaterialTheme.typography.headlineSmall.copy(
-                                fontWeight = FontWeight.Bold
-                            )
-                        )
-                    },
-                    trailingIcon = {
-                        if (searchQuery.text.isNotEmpty()) {
-                            IconButton(onClick = onClearSearch) {
-                                Icon(
-                                    Icons.Default.Clear,
-                                    contentDescription = "Clear search",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+    val hasFilterSlideOut = !showBackArrow && !isSearchMode &&
+        (onFollowingFilterChange != null || onTopicsFollowingFilterChange != null)
+
+    Column(modifier = modifier) {
+        TopAppBar(
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = MaterialTheme.colorScheme.surface,
+                scrolledContainerColor = MaterialTheme.colorScheme.surface,
+                titleContentColor = MaterialTheme.colorScheme.onSurface,
+                actionIconContentColor = MaterialTheme.colorScheme.onSurface,
+                navigationIconContentColor = MaterialTheme.colorScheme.onSurface
+            ),
+            title = {
+                if (isSearchMode) {
+                    TextField(
+                        value = searchQuery,
+                        onValueChange = onSearchQueryChange,
+                        placeholder = {
+                            Text(
+                                "Search notes...",
+                                style = MaterialTheme.typography.headlineSmall.copy(
+                                    fontWeight = FontWeight.Bold
                                 )
+                            )
+                        },
+                        trailingIcon = {
+                            if (searchQuery.text.isNotEmpty()) {
+                                IconButton(onClick = onClearSearch) {
+                                    Icon(
+                                        Icons.Default.Clear,
+                                        contentDescription = "Clear search",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 8.dp) // Add padding to match title spacing
-                        .focusRequester(focusRequester),
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.headlineSmall.copy(
-                        fontWeight = FontWeight.Bold
-                    ),
-                    colors = TextFieldDefaults.colors(
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent
-                    )
-                )
-            } else {
-                // Normal mode - show title with or without dropdown based on context
-                if (showBackArrow) {
-                    // Thread view - just show title without dropdown
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.headlineSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 8.dp)
+                            .focusRequester(focusRequester),
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.headlineSmall.copy(
+                            fontWeight = FontWeight.Bold
                         ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        colors = TextFieldDefaults.colors(
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent
+                        )
                     )
                 } else {
-                    // Dashboard view - show title with dropdown
-                    Box {
+                    // Title: just text, or clickable title + arrow when filter slide-out is below
+                    if (showBackArrow) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.headlineSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    } else {
                         Row(
                             modifier = Modifier
-                                .clickable { feedDropdownExpanded = true }
+                                .clickable { feedDropdownExpanded = !feedDropdownExpanded }
                                 .padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -155,66 +175,16 @@ fun AdaptiveHeader(
                             Spacer(modifier = Modifier.width(4.dp))
                             Icon(
                                 imageVector = Icons.Default.KeyboardArrowDown,
-                                contentDescription = "Feed view selector",
+                                contentDescription = "Feed filter options",
                                 tint = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier
                                     .size(20.dp)
                                     .rotate(rotationAngle)
                             )
                         }
-
-                        // Feed view dropdown menu
-                        DropdownMenu(
-                            expanded = feedDropdownExpanded,
-                            onDismissRequest = { feedDropdownExpanded = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Home") },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Outlined.Home,
-                                        contentDescription = null,
-                                        tint = if (currentFeedView == "Home") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                },
-                                onClick = {
-                                    onFeedViewChange("Home")
-                                    feedDropdownExpanded = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Popular") },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Outlined.TrendingUp,
-                                        contentDescription = null,
-                                        tint = if (currentFeedView == "Popular") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                },
-                                onClick = {
-                                    onFeedViewChange("Popular")
-                                    feedDropdownExpanded = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Latest") },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Outlined.Schedule,
-                                        contentDescription = null,
-                                        tint = if (currentFeedView == "Latest") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                },
-                                onClick = {
-                                    onFeedViewChange("Latest")
-                                    feedDropdownExpanded = false
-                                }
-                            )
-                        }
                     }
                 }
-            }
-        },
+            },
         navigationIcon = {
             if (isSearchMode || showBackArrow) {
                 // Search mode or back arrow mode - show back button
@@ -258,7 +228,7 @@ fun AdaptiveHeader(
                         IconButton(onClick = onLoginClick ?: {}) {
                             Icon(
                                 imageVector = Icons.Outlined.Login,
-                                contentDescription = "Log In",
+                                contentDescription = "Login with Amber",
                                 tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
@@ -277,13 +247,25 @@ fun AdaptiveHeader(
                                         ),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text(
-                                        text = userDisplayName?.take(1)?.uppercase() ?: "U",
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            color = MaterialTheme.colorScheme.onPrimary,
-                                            fontWeight = FontWeight.Bold
+                                    if (!userAvatarUrl.isNullOrBlank()) {
+                                        AsyncImage(
+                                            model = userAvatarUrl,
+                                            contentDescription = "Profile",
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.primary),
+                                            contentScale = ContentScale.Crop
                                         )
-                                    )
+                                    } else {
+                                        Text(
+                                            text = userDisplayName?.take(1)?.uppercase() ?: "U",
+                                            style = MaterialTheme.typography.labelMedium.copy(
+                                                color = MaterialTheme.colorScheme.onPrimary,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        )
+                                    }
                                 }
                             }
 
@@ -338,7 +320,96 @@ fun AdaptiveHeader(
                 }
             }
         },
-        scrollBehavior = scrollBehavior,
-        modifier = modifier
-    )
+            scrollBehavior = scrollBehavior
+        )
+        // Filter row slides out from full header (below bar), in line with rest of header — not trapped in title
+        if (hasFilterSlideOut) {
+            AnimatedVisibility(
+                visible = feedDropdownExpanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // All / Following (Home or Topics)
+                        if (onFollowingFilterChange != null) {
+                            FilterChip(
+                                selected = !isFollowingFilter,
+                                onClick = { onFollowingFilterChange(false) },
+                                label = { Text("All") }
+                            )
+                            FilterChip(
+                                selected = isFollowingFilter,
+                                onClick = { onFollowingFilterChange(true) },
+                                label = { Text("Following") }
+                            )
+                        }
+                        if (onTopicsFollowingFilterChange != null) {
+                            FilterChip(
+                                selected = !isTopicsFollowingFilter,
+                                onClick = { onTopicsFollowingFilterChange(false) },
+                                label = { Text("All") }
+                            )
+                            FilterChip(
+                                selected = isTopicsFollowingFilter,
+                                onClick = { onTopicsFollowingFilterChange(true) },
+                                label = { Text("Following") }
+                            )
+                        }
+                        // Home: Latest | Popular
+                        if (onHomeSortOrderChange != null) {
+                            FilterChip(
+                                selected = homeSortOrder == HomeSortOrder.Latest,
+                                onClick = { onHomeSortOrderChange(HomeSortOrder.Latest) },
+                                label = { Text("Latest") }
+                            )
+                            FilterChip(
+                                selected = homeSortOrder == HomeSortOrder.Popular,
+                                onClick = { onHomeSortOrderChange(HomeSortOrder.Popular) },
+                                label = { Text("Popular") }
+                            )
+                        }
+                        // Topics: Latest | Popular (Favorites removed — unused)
+                        if (onTopicsSortOrderChange != null) {
+                            FilterChip(
+                                selected = topicsSortOrder == TopicsSortOrder.Latest,
+                                onClick = { onTopicsSortOrderChange(TopicsSortOrder.Latest) },
+                                label = { Text("Latest") }
+                            )
+                            FilterChip(
+                                selected = topicsSortOrder == TopicsSortOrder.Popular,
+                                onClick = { onTopicsSortOrderChange(TopicsSortOrder.Popular) },
+                                label = { Text("Popular") }
+                            )
+                        }
+                        if (onEditFeedClick != null) {
+                            Spacer(modifier = Modifier.weight(1f))
+                            IconButton(
+                                onClick = onEditFeedClick,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Edit,
+                                    contentDescription = "Edit feed / custom filters (coming soon)",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

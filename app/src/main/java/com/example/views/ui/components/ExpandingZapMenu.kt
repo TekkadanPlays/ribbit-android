@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
@@ -32,7 +31,6 @@ fun ExpandingZapMenu(
     zapCount: Int = 0,
     totalZappedAmount: Long = 0,
     onZap: (Long) -> Unit,
-    onTestZap: () -> Unit,
     onEditClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
@@ -95,29 +93,6 @@ fun ExpandingZapMenu(
                 contentPadding = PaddingValues(horizontal = 0.dp),
                 reverseLayout = true // This makes it right-aligned
             ) {
-                // Test Zap
-                item {
-                    FilterChip(
-                        selected = false,
-                        onClick = {
-                            onExpandedChange(false)
-                            onTestZap()
-                        },
-                        label = { Text("TEST") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.BugReport,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                            labelColor = MaterialTheme.colorScheme.onSurface
-                        )
-                    )
-                }
-
                 // Zap amounts - sorted largest to smallest
                 items(zapAmounts.sortedDescending()) { amount ->
                     FilterChip(

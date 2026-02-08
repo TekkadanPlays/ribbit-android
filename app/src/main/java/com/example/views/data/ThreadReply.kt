@@ -27,7 +27,10 @@ data class ThreadReply(
     // Thread relationship fields (NIP-22)
     val rootNoteId: String? = null,      // The original note being replied to
     val replyToId: String? = null,       // Direct reply to (can be root or another reply)
-    val threadLevel: Int = 0             // Nesting level in thread (0 = direct reply to root)
+    val threadLevel: Int = 0,            // Nesting level in thread (0 = direct reply to root)
+
+    /** Relay URLs this reply was seen on; for relay orbs in thread view. */
+    val relayUrls: List<String> = emptyList()
 ) {
     /**
      * Get short content preview (first 100 characters)
@@ -55,31 +58,45 @@ data class ThreadReply(
 
     companion object {
         /**
-         * Parse tags to extract thread relationship information
+         * Parse tags to extract thread relationship information.
+         * Used for both Kind 1 (NIP-10 markers) and Kind 1111 / Topics (NIP-22).
          *
-         * NIP-22 format:
+         * NIP-22 (Topics / Kind 1111) — RelayTools-style:
+         * - Uppercase "E" tag = root thread (Kind 11)
+         * - Lowercase "e" tag = direct parent (Kind 11 or 1111); first "e" is the parent
+         *
+         * NIP-10 / marker style (Kind 1 and some 1111):
          * - ["e", <root-id>, <relay-url>, "root"] - Root event reference
          * - ["e", <parent-id>, <relay-url>, "reply"] - Parent reply reference
-         * - ["p", <pubkey>] - Author being replied to
          */
         fun parseThreadTags(tags: List<List<String>>): Triple<String?, String?, Int> {
             var rootId: String? = null
             var replyToId: String? = null
             var level = 0
 
+            // NIP-22: uppercase "E" = root (Topics / Kind 1111)
+            tags.forEach { tag ->
+                if (tag.size >= 2 && tag[0] == "E") {
+                    rootId = tag.getOrNull(1)
+                    return@forEach
+                }
+            }
+
             tags.forEach { tag ->
                 if (tag.isNotEmpty() && tag[0] == "e") {
                     val eventId = tag.getOrNull(1)
-                    val marker = tag.getOrNull(3)
+                    val marker = pickMarker(tag)
 
                     when (marker) {
                         "root" -> rootId = eventId
                         "reply" -> replyToId = eventId
                         else -> {
-                            // If no marker, first "e" tag is root, second is reply
-                            if (rootId == null) {
-                                rootId = eventId
-                            } else if (replyToId == null) {
+                            // No marker
+                            if (rootId != null) {
+                                // Root from uppercase E; last lowercase "e" is direct parent
+                                replyToId = eventId
+                            } else {
+                                // No E tag: treat "e" as the parent we're replying to (so single [e, noteId] = top-level, [e, parentId] = nested)
                                 replyToId = eventId
                             }
                         }
@@ -87,11 +104,21 @@ data class ThreadReply(
                 }
             }
 
-            // Calculate thread level: if parent == root, it's a top-level reply (0)
-            // Otherwise it's a nested reply (1+)
+            // Level: 0 if replying to thread root (replyToId == rootId or null); else 1+
             level = if (replyToId == rootId || replyToId == null) 0 else 1
 
             return Triple(rootId, replyToId, level)
+        }
+
+        /** Check index 3, then 4, then 2 for "root"/"reply" (match Amethyst) to support both tag orders. */
+        private fun pickMarker(tag: List<String>): String? {
+            val m3 = tag.getOrNull(3)
+            if (m3 == "root" || m3 == "reply") return m3
+            val m4 = tag.getOrNull(4)
+            if (m4 == "root" || m4 == "reply") return m4
+            val m2 = tag.getOrNull(2)
+            if (m2 == "root" || m2 == "reply") return m2
+            return null
         }
     }
 }
@@ -205,9 +232,31 @@ fun Note.toThreadReply(replyToId: String? = null, threadLevel: Int = 0): ThreadR
         mediaUrls = mediaUrls,
         rootNoteId = replyToId,
         replyToId = replyToId,
-        threadLevel = threadLevel
+        threadLevel = threadLevel,
+        relayUrls = relayUrls.ifEmpty { listOfNotNull(relayUrl) }
     )
 }
+
+/**
+ * Convert a Note (with rootNoteId/replyToId from NIP-10) to ThreadReply for threaded display.
+ * Use when building kind-1 reply chains; level is set when organizing into ThreadedReply tree.
+ */
+fun Note.toThreadReplyForThread(): ThreadReply = ThreadReply(
+    id = id,
+    author = author,
+    content = content,
+    timestamp = timestamp,
+    likes = likes,
+    shares = shares,
+    replies = comments,
+    isLiked = isLiked,
+    hashtags = hashtags,
+    mediaUrls = mediaUrls,
+    rootNoteId = rootNoteId,
+    replyToId = replyToId,
+    threadLevel = 0,
+    relayUrls = relayUrls.ifEmpty { listOfNotNull(relayUrl) }
+)
 
 /**
  * Convert a ThreadReply back to a Note for display compatibility
@@ -223,6 +272,8 @@ fun ThreadReply.toNote(): Note {
         comments = replies, // Map replies count to comments
         isLiked = isLiked,
         hashtags = hashtags,
-        mediaUrls = mediaUrls
+        mediaUrls = mediaUrls,
+        relayUrl = relayUrls.firstOrNull(),
+        relayUrls = relayUrls
     )
 }

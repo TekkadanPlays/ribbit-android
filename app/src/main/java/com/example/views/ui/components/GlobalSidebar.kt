@@ -4,8 +4,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,6 +29,7 @@ fun GlobalSidebar(
     selectedDisplayName: String = "All Relays",
     onItemClick: (String) -> Unit,
     onToggleCategory: (String) -> Unit = {},
+    onQrClick: () -> Unit = {},
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
@@ -42,6 +45,7 @@ fun GlobalSidebar(
                     selectedDisplayName = selectedDisplayName,
                     onItemClick = onItemClick,
                     onToggleCategory = onToggleCategory,
+                    onQrClick = onQrClick,
                     onClose = {
                         scope.launch {
                             drawerState.close()
@@ -63,6 +67,7 @@ private fun DrawerContent(
     selectedDisplayName: String,
     onItemClick: (String) -> Unit,
     onToggleCategory: (String) -> Unit,
+    onQrClick: () -> Unit = {},
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -71,26 +76,92 @@ private fun DrawerContent(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(vertical = 16.dp)
+            .padding(bottom = 80.dp) // Clear of bottom nav bar
     ) {
-        // Header with selected relay/category
-        Column(
-            modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
+        // Header with selected relay/category and QR button
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 28.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = "Relay Categories",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "Current: $selectedDisplayName",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 4.dp)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Relay Categories",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Current: $selectedDisplayName",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+            IconButton(
+                onClick = {
+                    onQrClick()
+                    onClose()
+                },
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.QrCode2,
+                    contentDescription = "My QR code"
+                )
+            }
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        // Global feed button — use theme primary (dull sage), not bright green
+        val isGlobalSelected = selectedDisplayName == "Global"
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .clickable {
+                    onItemClick("global")
+                    onClose()
+                },
+            shape = RoundedCornerShape(12.dp),
+            color = if (isGlobalSelected) {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+            }
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Public,
+                    contentDescription = "Global feed",
+                    modifier = Modifier.size(24.dp),
+                    tint = if (isGlobalSelected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+                Text(
+                    text = "Global",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = if (isGlobalSelected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+        }
 
         // Relay Categories Section
         if (relayCategories.isNotEmpty()) {

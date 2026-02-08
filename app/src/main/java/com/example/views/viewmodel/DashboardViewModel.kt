@@ -6,11 +6,25 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.views.data.Note
 import com.example.views.data.NoteUpdate
-import com.example.views.data.SampleData
+import com.example.views.data.UrlPreviewInfo
 import com.example.views.network.WebSocketClient
+import com.example.views.repository.ContactListRepository
 import com.example.views.repository.NotesRepository
+import com.example.views.relay.RelayConnectionStateMachine
+import com.example.views.relay.RelayEndpointStatus
+import com.example.views.relay.RelayState
+import com.example.views.repository.ProfileMetadataCache
+import com.example.views.services.UrlPreviewCache
+import com.example.views.services.UrlPreviewManager
+import com.example.views.services.UrlPreviewService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
@@ -21,12 +35,25 @@ data class DashboardUiState(
     val error: String? = null,
     val currentDestination: String = "home",
     val hasRelays: Boolean = false,
-    val isLoadingFromRelays: Boolean = false
+    val isLoadingFromRelays: Boolean = false,
+    /** Pending new notes count for All feed (current relay set, no follow filter). */
+    val newNotesCountAll: Int = 0,
+    /** Pending new notes count for Following feed (current relay set, follow filter). */
+    val newNotesCountFollowing: Int = 0,
+    /** Follow list (kind-3 p-tags) for "Following" filter. */
+    val followList: Set<String> = emptySet(),
+    /** Relay connection state for feed/connection indicator. */
+    val relayState: RelayState = RelayState.Disconnected,
+    /** Per-relay summary for UI (e.g. "3/5 relays"); null when not applicable. */
+    val relayCountSummary: String? = null,
+    /** URL previews by note id (enrichment side channel); avoids replacing whole notes list when previews load. */
+    val urlPreviewsByNoteId: Map<String, List<UrlPreviewInfo>> = emptyMap()
 )
 
 class DashboardViewModel : ViewModel() {
     private val webSocketClient = WebSocketClient()
-    private val notesRepository = NotesRepository()
+    private val notesRepository = NotesRepository.getInstance()
+    private val urlPreviewManager = UrlPreviewManager(UrlPreviewService(), UrlPreviewCache)
 
     private val _uiState = MutableStateFlow(DashboardUiState())
     val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
@@ -36,10 +63,66 @@ class DashboardViewModel : ViewModel() {
     }
 
     init {
-        // Start with empty state until relays are configured
         loadInitialData()
-        connectWebSocket()
+        // Defer WebSocket: feed is relay-driven; connect only when a real backend exists (reduces startup/no-op connection)
+        // connectWebSocket()
         observeNotesFromRepository()
+        observeRelayConnectionState()
+        // Profile→notes updates are coalesced and applied in NotesRepository (profile update coalescer)
+    }
+
+    private fun observeRelayConnectionState() {
+        val stateMachine = RelayConnectionStateMachine.getInstance()
+        viewModelScope.launch {
+            stateMachine.state.collect { state ->
+                _uiState.value = _uiState.value.copy(relayState = state)
+            }
+        }
+        viewModelScope.launch {
+            stateMachine.perRelayState.collect { perRelay ->
+                val total = perRelay.size
+                if (total <= 1) {
+                    _uiState.value = _uiState.value.copy(relayCountSummary = null)
+                    return@collect
+                }
+                val connected = perRelay.values.count { it == RelayEndpointStatus.Connected }
+                _uiState.value = _uiState.value.copy(relayCountSummary = "$connected/$total relays")
+            }
+        }
+    }
+
+    /**
+     * Set cache relay URLs for kind-0 profile fetches. Call from UI when account is available.
+     */
+    fun setCacheRelayUrls(urls: List<String>) {
+        notesRepository.setCacheRelayUrls(urls)
+    }
+
+    /**
+     * Load follow list (kind-3) for the given pubkey. Call from UI when account is available.
+     * Uses ContactListRepository cache (5 min TTL) so repeated calls are cheap.
+     * @param forceRefresh if true, bypass cache (e.g. pull-to-refresh on Following).
+     */
+    fun loadFollowList(pubkey: String, cacheRelayUrls: List<String>, forceRefresh: Boolean = false) {
+        viewModelScope.launch {
+            val cached = ContactListRepository.getCachedFollowList(pubkey)
+            if (cached != null && !forceRefresh) {
+                _uiState.value = _uiState.value.copy(followList = cached)
+                return@launch
+            }
+            val list = ContactListRepository.fetchFollowList(pubkey, cacheRelayUrls, forceRefresh)
+            _uiState.value = _uiState.value.copy(followList = list)
+        }
+    }
+
+    /**
+     * Set follow filter on notes: when enabled, only notes from followList authors are shown.
+     * When Following is selected but followList is still empty (loading), pass null so repo shows all until loaded.
+     */
+    fun setFollowFilter(enabled: Boolean) {
+        val list = _uiState.value.followList
+        val toPass = if (enabled) { if (list.isEmpty()) null else list } else null
+        notesRepository.setFollowFilter(toPass, enabled)
     }
 
     private fun loadInitialData() {
@@ -50,46 +133,96 @@ class DashboardViewModel : ViewModel() {
         )
     }
 
+    /** Debounced enrichment job: only one runs at a time, after list stabilizes, so UI stays fast. */
+    private var enrichmentJob: Job? = null
+
     /**
-     * Observe notes from the NotesRepository
+     * Observe notes from the NotesRepository; emit immediately for fast render; enrich with URL previews after list stabilizes.
      */
     private fun observeNotesFromRepository() {
         viewModelScope.launch {
-            notesRepository.notes.collect { notes ->
-                _uiState.value = _uiState.value.copy(
-                    notes = notes,
-                    isLoadingFromRelays = false,
-                    hasRelays = notes.isNotEmpty() || _uiState.value.hasRelays
-                )
+            try {
+                notesRepository.notes.collect { notes ->
+                    try {
+                        _uiState.value = _uiState.value.copy(
+                            notes = notes,
+                            isLoadingFromRelays = false,
+                            hasRelays = notes.isNotEmpty() || _uiState.value.hasRelays
+                        )
+                        if (notes.isEmpty()) return@collect
+                        enrichmentJob?.cancel()
+                        enrichmentJob = viewModelScope.launch {
+                            try {
+                                delay(250)
+                                val snapshot = notes.map { it.id }
+                                val enriched = withContext(Dispatchers.IO) {
+                                    urlPreviewManager.processNotesForUrlPreviews(notes)
+                                }
+                                if (_uiState.value.notes.map { it.id } == snapshot) {
+                                    val previewsByNoteId = enriched.associate { it.id to it.urlPreviews }
+                                    _uiState.value = _uiState.value.copy(urlPreviewsByNoteId = previewsByNoteId)
+                                }
+                            } catch (e: Throwable) {
+                                Log.e(TAG, "Enrichment failed: ${e.message}", e)
+                            }
+                        }
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "Notes collect failed: ${e.message}", e)
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "Notes flow failed: ${e.message}", e)
             }
         }
 
         viewModelScope.launch {
-            notesRepository.isLoading.collect { isLoading ->
-                _uiState.value = _uiState.value.copy(
-                    isLoadingFromRelays = isLoading
-                )
+            try {
+                notesRepository.isLoading.collect { isLoading ->
+                    _uiState.value = _uiState.value.copy(isLoadingFromRelays = isLoading)
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "Loading flow failed: ${e.message}", e)
             }
         }
 
         viewModelScope.launch {
-            notesRepository.error.collect { error ->
-                if (error != null) {
+            try {
+                notesRepository.error.collect { error ->
+                    if (error != null) {
+                        _uiState.value = _uiState.value.copy(error = error)
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "Error flow failed: ${e.message}", e)
+            }
+        }
+
+        viewModelScope.launch {
+            try {
+                notesRepository.newNotesCounts.collect { counts ->
                     _uiState.value = _uiState.value.copy(
-                        error = error
+                        newNotesCountAll = counts.all,
+                        newNotesCountFollowing = counts.following
                     )
                 }
+            } catch (e: Throwable) {
+                Log.e(TAG, "NewNotesCounts flow failed: ${e.message}", e)
             }
         }
+    }
 
-
+    /**
+     * Apply pending new notes to the feed (call on pull-to-refresh).
+     */
+    fun applyPendingNotes() {
+        notesRepository.applyPendingNotes()
     }
 
     private fun connectWebSocket() {
         viewModelScope.launch {
             try {
                 webSocketClient.connect()
-                webSocketClient.loadNotes(SampleData.sampleNotes)
+                // No fake notes: feed is driven by NotesRepository (relay). WebSocket is for real-time like/share updates only.
 
                 // Listen for real-time updates
                 webSocketClient.realTimeUpdates.collect { update ->
@@ -202,7 +335,7 @@ class DashboardViewModel : ViewModel() {
             itemId.startsWith("relay:") -> {
                 val relayUrl = itemId.removePrefix("relay:")
                 Log.d(TAG, "Relay clicked: $relayUrl")
-                loadNotesFromSpecificRelay(relayUrl)
+                setDisplayFilterOnly(listOf(relayUrl))
             }
             itemId == "profile" -> openProfile("current_user")
             itemId == "settings" -> {
@@ -228,45 +361,18 @@ class DashboardViewModel : ViewModel() {
     }
 
     /**
-     * Load notes from all general relays
+     * Load notes from all general relays (subscription + display both use same list).
      */
-    fun loadNotesFromAllGeneralRelays(relayUrls: List<String>) {
-        if (relayUrls.isEmpty()) {
-            Log.d(TAG, "No general relays configured")
-            _uiState.value = _uiState.value.copy(
-                notes = emptyList(),
-                hasRelays = false,
-                isLoadingFromRelays = false
-            )
-            return
-        }
-
-        Log.d(TAG, "Loading notes from ${relayUrls.size} general relays")
-        _uiState.value = _uiState.value.copy(
-            hasRelays = true,
-            isLoadingFromRelays = true
-        )
-
-        viewModelScope.launch {
-            try {
-                notesRepository.disconnectAll()
-                notesRepository.connectToRelays(relayUrls)
-                notesRepository.subscribeToNotes(limit = 100)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error loading notes from general relays: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(
-                    error = "Failed to load notes: ${e.message}",
-                    isLoadingFromRelays = false
-                )
-            }
-        }
+    fun loadNotesFromAllGeneralRelays(allUserRelayUrls: List<String>) {
+        loadNotesFromFavoriteCategory(allUserRelayUrls, allUserRelayUrls)
     }
 
     /**
-     * Load notes from user's favorite category relays
+     * Set subscription to all user relays and display filter to sidebar selection.
+     * Call on first load / when categories change. allUserRelayUrls = all relays we stay connected to; displayUrls = what to show (sidebar selection).
      */
-    fun loadNotesFromFavoriteCategory(relayUrls: List<String>) {
-        if (relayUrls.isEmpty()) {
+    fun loadNotesFromFavoriteCategory(allUserRelayUrls: List<String>, displayUrls: List<String>) {
+        if (allUserRelayUrls.isEmpty()) {
             Log.d(TAG, "No relays configured for favorite category")
             _uiState.value = _uiState.value.copy(
                 notes = emptyList(),
@@ -276,17 +382,17 @@ class DashboardViewModel : ViewModel() {
             return
         }
 
-        Log.d(TAG, "Loading notes from ${relayUrls.size} relays")
+        Log.d(TAG, "Loading notes: subscription=${allUserRelayUrls.size} relays, display=${displayUrls.size} relay(s)")
         _uiState.value = _uiState.value.copy(
             hasRelays = true,
             isLoadingFromRelays = true
         )
+        notesRepository.connectToRelays(if (displayUrls.isEmpty()) allUserRelayUrls else displayUrls)
 
         viewModelScope.launch {
             try {
-                notesRepository.disconnectAll()
-                notesRepository.connectToRelays(relayUrls)
-                notesRepository.subscribeToNotes(limit = 100)
+                notesRepository.ensureSubscriptionToNotes(allUserRelayUrls, limit = 100)
+                _uiState.value = _uiState.value.copy(isLoadingFromRelays = false)
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading notes from relays: ${e.message}", e)
                 _uiState.value = _uiState.value.copy(
@@ -298,41 +404,40 @@ class DashboardViewModel : ViewModel() {
     }
 
     /**
-     * Load notes from a specific relay only
+     * Update display filter only (sidebar selection). Does NOT change subscription or follow filter;
+     * only which relays' notes are shown. Follow and reply filters stay applied.
+     */
+    fun setDisplayFilterOnly(displayUrls: List<String>) {
+        notesRepository.connectToRelays(displayUrls)
+    }
+
+    /**
+     * Load notes from a specific relay only (display filter). Subscription stays on all relays.
      */
     fun loadNotesFromSpecificRelay(relayUrl: String) {
-        Log.d(TAG, "Loading notes from specific relay: $relayUrl")
-        _uiState.value = _uiState.value.copy(
-            hasRelays = true,
-            isLoadingFromRelays = true
-        )
+        setDisplayFilterOnly(listOf(relayUrl))
+    }
 
+    /**
+     * Full re-fetch from relays. Use sparingly; pull-to-refresh uses applyPendingNotes instead.
+     */
+    fun refreshNotes() {
         viewModelScope.launch {
-            try {
-                notesRepository.disconnectAll()
-                notesRepository.connectToRelays(listOf(relayUrl))
-                notesRepository.subscribeToRelayNotes(relayUrl, limit = 100)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error loading notes from relay $relayUrl: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(
-                    error = "Failed to load notes from relay: ${e.message}",
-                    isLoadingFromRelays = false
-                )
-            }
+            notesRepository.refresh()
         }
     }
 
     /**
-     * Refresh notes - flush cached notes to visible feed
+     * Push profile cache into the feed so notes show updated names/avatars.
+     * Call when the feed becomes visible so cached profiles (e.g. from debug Fetch all) render.
      */
-    fun refreshNotes() {
-        Log.d(TAG, "Refreshing notes - flushing cached notes to feed")
-        // Notes now stream live - no manual flush needed
+    fun syncFeedAuthorsFromCache() {
+        notesRepository.refreshAuthorsFromCache()
     }
 
     override fun onCleared() {
         super.onCleared()
         webSocketClient.cleanup()
-        notesRepository.disconnectAll()
+        // Do not call notesRepository.disconnectAll() - shared connection and notes outlive this screen
     }
 }

@@ -47,6 +47,23 @@ object UrlDetector {
         
         return urls.distinct()
     }
+
+    /**
+     * Find all URLs with their character ranges in order of appearance.
+     * Used to place HTTP metadata (preview) directly beneath its URL in the content.
+     * Range is inclusive (e.g. range.last + 1 is the exclusive end for substring).
+     */
+    fun findUrlsWithPositions(text: String): List<Pair<IntRange, String>> {
+        val matcher = URL_PATTERN.matcher(text)
+        val result = mutableListOf<Pair<IntRange, String>>()
+        while (matcher.find()) {
+            val url = matcher.group()
+            if (isValidUrl(url)) {
+                result.add(IntRange(matcher.start(), matcher.end() - 1) to url)
+            }
+        }
+        return result
+    }
     
     /**
      * Find the first URL in the given text
@@ -131,6 +148,13 @@ object UrlDetector {
         return videoExtensions.any { lowerUrl.contains(it) }
     }
 }
+
+
+
+
+
+
+
 
 
 

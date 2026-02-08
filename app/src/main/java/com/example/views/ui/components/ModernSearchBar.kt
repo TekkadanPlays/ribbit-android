@@ -342,8 +342,8 @@ private fun SearchResultListItem(
                         horizontalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Comment,
-                            contentDescription = null,
+                            imageVector = Icons.Filled.Reply,
+                            contentDescription = "Replies",
                             modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )

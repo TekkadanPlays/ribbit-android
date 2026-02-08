@@ -38,7 +38,7 @@ class SplashActivity : ComponentActivity() {
 @Composable
 fun SplashScreen(onTimeout: () -> Unit) {
     LaunchedEffect(Unit) {
-        delay(1500) // Show splash for 1.5 seconds
+        delay(500) // Short splash for branding; system splash covers TTID until first frame
         onTimeout()
     }
     

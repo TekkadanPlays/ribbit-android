@@ -5,16 +5,23 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.views.data.Note
+import com.example.views.data.ThreadReply
+import com.example.views.data.ThreadedReply
+import com.example.views.data.toThreadReplyForThread
 import com.example.views.repository.Kind1RepliesRepository
+import com.example.views.repository.ProfileMetadataCache
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 
 @Immutable
 data class Kind1RepliesUiState(
     val note: Note? = null,
     val replies: List<Note> = emptyList(),
+    val threadedReplies: List<ThreadedReply> = emptyList(),
     val isLoading: Boolean = false,
     val error: String? = null,
     val totalReplyCount: Int = 0,
@@ -43,10 +50,21 @@ class Kind1RepliesViewModel : ViewModel() {
 
     init {
         observeRepliesFromRepository()
+        ProfileMetadataCache.getInstance().profileUpdated
+            .onEach { pubkey -> repository.updateAuthorInReplies(pubkey) }
+            .launchIn(viewModelScope)
     }
 
     /**
-     * Observe replies from the repository
+     * Set cache relay URLs for kind-0 profile fetches (used when loading replies).
+     */
+    fun setCacheRelayUrls(urls: List<String>) {
+        repository.setCacheRelayUrls(urls)
+    }
+
+    /**
+     * Observe replies from the repository. Every time the list updates (new reply or fetched parent),
+     * we re-run organizeRepliesIntoThreads so the tree stays correct (Amethyst-style).
      */
     private fun observeRepliesFromRepository() {
         viewModelScope.launch {
@@ -108,7 +126,7 @@ class Kind1RepliesViewModel : ViewModel() {
     }
 
     /**
-     * Update replies state with sorting
+     * Update replies state with sorting and threaded structure (NIP-10 reply chains).
      */
     private fun updateRepliesState(replies: List<Note>) {
         val sortedReplies = when (_uiState.value.sortOrder) {
@@ -116,14 +134,51 @@ class Kind1RepliesViewModel : ViewModel() {
             Kind1ReplySortOrder.REVERSE_CHRONOLOGICAL -> replies.sortedByDescending { it.timestamp }
             Kind1ReplySortOrder.MOST_LIKED -> replies.sortedByDescending { it.likes }
         }
+        val threadReplies = sortedReplies.map { it.toThreadReplyForThread() }
+        val threadedReplies = organizeRepliesIntoThreads(threadReplies)
 
+        val noteId = _uiState.value.note?.id
         _uiState.value = _uiState.value.copy(
             replies = sortedReplies,
+            threadedReplies = threadedReplies,
             totalReplyCount = replies.size,
             isLoading = false
         )
+        if (noteId != null) com.example.views.repository.ReplyCountCache.set(noteId, replies.size)
 
-        Log.d(TAG, "Updated replies state: ${replies.size} replies")
+        Log.d(TAG, "Updated replies state: ${replies.size} replies, ${threadedReplies.size} root threads")
+    }
+
+    /**
+     * Organize flat list of replies into threaded structure (Amethyst-style: strict root = only
+     * direct-to-root or replyToId==null; never treat "parent not in list" as root, so orphans
+     * appear once their parent is loaded and the tree stays coherent).
+     */
+    private fun organizeRepliesIntoThreads(replies: List<ThreadReply>): List<ThreadedReply> {
+        if (replies.isEmpty()) return emptyList()
+        val noteId = _uiState.value.note?.id ?: return emptyList()
+
+        fun buildThreadedReply(reply: ThreadReply, level: Int = 0): ThreadedReply {
+            val children = replies
+                .filter { it.replyToId == reply.id }
+                .map { buildThreadedReply(it, level + 1) }
+                .sortedBy { it.reply.timestamp }
+            return ThreadedReply(reply = reply, children = children, level = level)
+        }
+
+        // Only direct replies to the thread root are roots. Replies whose parent isn't in the
+        // list are omitted until the parent is fetched (avoids flat "all at parent level").
+        val rootReplies = replies
+            .filter { reply ->
+                reply.replyToId == noteId || reply.replyToId == null
+            }
+            .map { buildThreadedReply(it) }
+
+        return when (_uiState.value.sortOrder) {
+            Kind1ReplySortOrder.CHRONOLOGICAL -> rootReplies.sortedBy { it.reply.timestamp }
+            Kind1ReplySortOrder.REVERSE_CHRONOLOGICAL -> rootReplies.sortedByDescending { it.reply.timestamp }
+            Kind1ReplySortOrder.MOST_LIKED -> rootReplies.sortedByDescending { it.reply.likes }
+        }
     }
 
     /**
@@ -191,6 +246,7 @@ class Kind1RepliesViewModel : ViewModel() {
         if (_uiState.value.note?.id == noteId) {
             _uiState.value = _uiState.value.copy(
                 replies = emptyList(),
+                threadedReplies = emptyList(),
                 totalReplyCount = 0
             )
         }

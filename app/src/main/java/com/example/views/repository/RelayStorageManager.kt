@@ -20,7 +20,7 @@ import kotlinx.serialization.json.Json
  * - relay_personal_inbox_{pubkey} → List<UserRelay> (Personal tab - Inbox)
  * - relay_personal_cache_{pubkey} → List<UserRelay> (Personal tab - Cache)
  */
-class RelayStorageManager(context: Context) {
+class RelayStorageManager(val context: Context) {
 
     private val prefs: SharedPreferences = context.getSharedPreferences("relay_storage", Context.MODE_PRIVATE)
 
@@ -34,7 +34,15 @@ class RelayStorageManager(context: Context) {
         private const val KEY_PERSONAL_OUTBOX = "relay_personal_outbox"
         private const val KEY_PERSONAL_INBOX = "relay_personal_inbox"
         private const val KEY_PERSONAL_CACHE = "relay_personal_cache"
+
+        /** Strip trailing slash from relay URLs so display/storage is consistent across the app. */
+        fun normalizeRelayUrl(url: String): String = url.trim().removeSuffix("/")
     }
+
+    private fun normalizeRelay(relay: UserRelay): UserRelay = relay.copy(url = normalizeRelayUrl(relay.url))
+    private fun normalizeRelays(relays: List<UserRelay>): List<UserRelay> = relays.map { normalizeRelay(it) }
+    private fun normalizeCategories(categories: List<RelayCategory>): List<RelayCategory> =
+        categories.map { it.copy(relays = normalizeRelays(it.relays)) }
 
     // ====== General Tab - Relay Categories ======
 
@@ -43,7 +51,7 @@ class RelayStorageManager(context: Context) {
      */
     fun saveCategories(pubkey: String, categories: List<RelayCategory>) {
         val key = "${KEY_CATEGORIES}_${pubkey}"
-        val wrapper = RelayCategoriesWrapper(categories)
+        val wrapper = RelayCategoriesWrapper(normalizeCategories(categories))
         val jsonString = json.encodeToString(wrapper)
         prefs.edit().putString(key, jsonString).apply()
     }
@@ -59,7 +67,7 @@ class RelayStorageManager(context: Context) {
         return if (jsonString != null) {
             try {
                 val wrapper = json.decodeFromString<RelayCategoriesWrapper>(jsonString)
-                wrapper.categories
+                normalizeCategories(wrapper.categories)
             } catch (e: Exception) {
                 // If deserialization fails, return default
                 DefaultRelayCategories.getAllDefaultCategories()
@@ -76,7 +84,7 @@ class RelayStorageManager(context: Context) {
      */
     fun saveOutboxRelays(pubkey: String, relays: List<UserRelay>) {
         val key = "${KEY_PERSONAL_OUTBOX}_${pubkey}"
-        val wrapper = UserRelayListWrapper(relays)
+        val wrapper = UserRelayListWrapper(normalizeRelays(relays))
         val jsonString = json.encodeToString(wrapper)
         prefs.edit().putString(key, jsonString).apply()
     }
@@ -91,7 +99,7 @@ class RelayStorageManager(context: Context) {
         return if (jsonString != null) {
             try {
                 val wrapper = json.decodeFromString<UserRelayListWrapper>(jsonString)
-                wrapper.relays
+                normalizeRelays(wrapper.relays)
             } catch (e: Exception) {
                 emptyList()
             }
@@ -107,7 +115,7 @@ class RelayStorageManager(context: Context) {
      */
     fun saveInboxRelays(pubkey: String, relays: List<UserRelay>) {
         val key = "${KEY_PERSONAL_INBOX}_${pubkey}"
-        val wrapper = UserRelayListWrapper(relays)
+        val wrapper = UserRelayListWrapper(normalizeRelays(relays))
         val jsonString = json.encodeToString(wrapper)
         prefs.edit().putString(key, jsonString).apply()
     }
@@ -122,7 +130,7 @@ class RelayStorageManager(context: Context) {
         return if (jsonString != null) {
             try {
                 val wrapper = json.decodeFromString<UserRelayListWrapper>(jsonString)
-                wrapper.relays
+                normalizeRelays(wrapper.relays)
             } catch (e: Exception) {
                 emptyList()
             }
@@ -138,7 +146,7 @@ class RelayStorageManager(context: Context) {
      */
     fun saveCacheRelays(pubkey: String, relays: List<UserRelay>) {
         val key = "${KEY_PERSONAL_CACHE}_${pubkey}"
-        val wrapper = UserRelayListWrapper(relays)
+        val wrapper = UserRelayListWrapper(normalizeRelays(relays))
         val jsonString = json.encodeToString(wrapper)
         prefs.edit().putString(key, jsonString).apply()
     }
@@ -153,7 +161,7 @@ class RelayStorageManager(context: Context) {
         return if (jsonString != null) {
             try {
                 val wrapper = json.decodeFromString<UserRelayListWrapper>(jsonString)
-                wrapper.relays
+                normalizeRelays(wrapper.relays)
             } catch (e: Exception) {
                 getDefaultCacheRelays()
             }
@@ -176,17 +184,17 @@ class RelayStorageManager(context: Context) {
                 write = false
             ),
             UserRelay(
+                url = "wss://user.kindpag.es",
+                read = true,
+                write = false
+            ),
+            UserRelay(
+                url = "wss://indexer.coracle.social",
+                read = true,
+                write = false
+            ),
+            UserRelay(
                 url = "wss://relay.nostr.band",
-                read = true,
-                write = false
-            ),
-            UserRelay(
-                url = "wss://cache2.primal.net",
-                read = true,
-                write = false
-            ),
-            UserRelay(
-                url = "wss://relay.damus.io",
                 read = true,
                 write = false
             )

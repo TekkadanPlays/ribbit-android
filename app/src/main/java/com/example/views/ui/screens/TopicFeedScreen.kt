@@ -26,6 +26,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.views.repository.TopicNote
 import com.example.views.viewmodel.TopicsViewModel
 import com.example.views.ui.components.LoadingAnimation
+import com.example.views.ui.components.ProfilePicture
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -210,6 +211,11 @@ private fun TopicCard(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
+                    ProfilePicture(
+                        author = topic.author,
+                        size = 28.dp,
+                        modifier = Modifier.size(28.dp)
+                    )
                     Text(
                         text = topic.author.displayName,
                         style = MaterialTheme.typography.bodyMedium,

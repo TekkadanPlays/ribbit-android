@@ -15,6 +15,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -68,23 +70,34 @@ fun AccountSwitchBottomSheet(
             // Account list
             if (savedAccounts.isEmpty()) {
                 // No accounts saved
+                val context = androidx.compose.ui.platform.LocalContext.current
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
                         text = "No accounts saved",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Sign in with Amber to get started",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Button(onClick = { onAddAccount() }) {
+                        Text("Login with Amber")
+                    }
+                    FilledTonalButton(
+                        onClick = {
+                            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/greenart7c3/Amber")))
+                        }
+                    ) {
+                        Text("Download Amber")
+                    }
                 }
             } else {
                 savedAccounts.forEach { account ->
@@ -120,7 +133,7 @@ fun AccountSwitchBottomSheet(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Add Another Account",
+                    text = if (savedAccounts.isEmpty()) "Login with Amber" else "Add Another Account",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium
@@ -170,7 +183,7 @@ private fun AccountListItem(
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Avatar
+        // Avatar: profile picture when available, else initial
         Box(
             modifier = Modifier
                 .size(48.dp)
@@ -178,13 +191,24 @@ private fun AccountListItem(
                 .background(MaterialTheme.colorScheme.primary),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = account.displayName?.take(1)?.uppercase()
-                    ?: account.toShortNpub().take(1).uppercase(),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onPrimary,
-                fontWeight = FontWeight.Bold
-            )
+            if (!account.picture.isNullOrBlank()) {
+                AsyncImage(
+                    model = account.picture,
+                    contentDescription = "Profile",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Text(
+                    text = account.displayName?.take(1)?.uppercase()
+                        ?: account.toShortNpub().take(1).uppercase(),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
 
         Spacer(modifier = Modifier.width(16.dp))

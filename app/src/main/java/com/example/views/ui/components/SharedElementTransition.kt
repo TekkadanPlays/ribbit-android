@@ -17,7 +17,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.example.views.data.Author
 import com.example.views.data.SampleData
 
@@ -58,12 +60,23 @@ fun ProfilePicture(
             ),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = author.displayName.take(1).uppercase(),
-            style = MaterialTheme.typography.titleLarge.copy(
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
+        if (author.avatarUrl != null) {
+            AsyncImage(
+                model = author.avatarUrl,
+                contentDescription = "Profile picture",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
             )
-        )
+        } else {
+            Text(
+                text = author.displayName.take(1).uppercase(),
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
     }
 }

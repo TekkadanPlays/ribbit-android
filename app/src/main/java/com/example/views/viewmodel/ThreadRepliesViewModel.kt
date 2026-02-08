@@ -8,10 +8,13 @@ import com.example.views.data.NoteWithReplies
 import com.example.views.data.ThreadReply
 import com.example.views.data.ThreadedReply
 import com.example.views.data.Note
+import com.example.views.repository.ProfileMetadataCache
 import com.example.views.repository.ThreadRepliesRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 
 @Immutable
@@ -47,6 +50,16 @@ class ThreadRepliesViewModel : ViewModel() {
 
     init {
         observeRepliesFromRepository()
+        ProfileMetadataCache.getInstance().profileUpdated
+            .onEach { pubkey -> repository.updateAuthorInReplies(pubkey) }
+            .launchIn(viewModelScope)
+    }
+
+    /**
+     * Set cache relay URLs for kind-0 profile fetches (used when loading replies).
+     */
+    fun setCacheRelayUrls(urls: List<String>) {
+        repository.setCacheRelayUrls(urls)
     }
 
     /**
@@ -123,12 +136,14 @@ class ThreadRepliesViewModel : ViewModel() {
 
         val threadedReplies = organizeRepliesIntoThreads(sortedReplies)
 
+        val noteId = _uiState.value.note?.id
         _uiState.value = _uiState.value.copy(
             replies = sortedReplies,
             threadedReplies = threadedReplies,
             totalReplyCount = replies.size,
             isLoading = false
         )
+        if (noteId != null) com.example.views.repository.ReplyCountCache.set(noteId, replies.size)
 
         Log.d(TAG, "Updated replies state: ${replies.size} replies, ${threadedReplies.size} threads")
     }
@@ -156,12 +171,10 @@ class ThreadRepliesViewModel : ViewModel() {
             )
         }
 
-        // Find root-level replies (those that reply directly to the note)
+        // Topics (Kind 1111): strict roots = only direct-to-thread or no parent. Nested replies (replyToId = another reply.id) become children.
         val rootReplies = replies
             .filter { reply ->
-                reply.replyToId == noteId ||
-                reply.replyToId == null ||
-                replies.none { it.id == reply.replyToId }
+                reply.replyToId == noteId || reply.replyToId == null
             }
             .map { buildThreadedReply(it) }
 

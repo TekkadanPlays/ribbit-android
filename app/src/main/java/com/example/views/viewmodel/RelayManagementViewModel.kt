@@ -1,14 +1,18 @@
 package com.example.views.viewmodel
 
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.views.data.UserRelay
 import com.example.views.data.RelayConnectionStatus
 import com.example.views.data.RelayCategory
 import com.example.views.data.DefaultRelayCategories
+import com.example.views.cache.Nip11CacheManager
+import com.example.views.relay.RelayConnectionStateMachine
 import com.example.views.repository.RelayRepository
 import com.example.views.repository.RelayStorageManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -91,6 +95,21 @@ class RelayManagementViewModel(
             storageManager.saveInboxRelays(pubkey, _uiState.value.inboxRelays)
             storageManager.saveCacheRelays(pubkey, _uiState.value.cacheRelays)
         }
+    }
+
+    /**
+     * Re-apply the active relay subscription so newly added relays start
+     * receiving kind-1 notes and kind-0 profiles immediately, even before
+     * the user navigates back to the feed.
+     */
+    private fun refreshActiveSubscription() {
+        val categories = _uiState.value.relayCategories
+        val favorite = categories.firstOrNull { it.isFavorite }
+            ?: categories.firstOrNull { it.isDefault }
+        val relayUrls = favorite?.relays?.map { it.url } ?: return
+        if (relayUrls.isEmpty()) return
+        Log.d("RelayMgmtVM", "Refreshing active subscription with ${relayUrls.size} relays")
+        RelayConnectionStateMachine.getInstance().requestFeedChange(relayUrls)
     }
 
     fun showAddRelayDialog() {
@@ -233,6 +252,7 @@ class RelayManagementViewModel(
             }
         )
         saveToStorage()
+        refreshActiveSubscription()
     }
 
     fun removeRelayFromCategory(categoryId: String, relayUrl: String) {
@@ -255,6 +275,7 @@ class RelayManagementViewModel(
             outboxRelays = _uiState.value.outboxRelays + relay
         )
         saveToStorage()
+        refreshActiveSubscription()
     }
 
     fun removeOutboxRelay(url: String) {
@@ -269,6 +290,7 @@ class RelayManagementViewModel(
             inboxRelays = _uiState.value.inboxRelays + relay
         )
         saveToStorage()
+        refreshActiveSubscription()
     }
 
     fun removeInboxRelay(url: String) {
@@ -283,6 +305,7 @@ class RelayManagementViewModel(
             cacheRelays = _uiState.value.cacheRelays + relay
         )
         saveToStorage()
+        refreshActiveSubscription()
     }
 
     fun removeCacheRelay(url: String) {
@@ -304,6 +327,7 @@ class RelayManagementViewModel(
             }
         )
         saveToStorage()
+        refreshActiveSubscription()
     }
 
     /**
@@ -337,18 +361,47 @@ class RelayManagementViewModel(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true)
 
-            relayRepository.fetchUserRelayList(pubkey)
+                relayRepository.fetchUserRelayList(pubkey)
                 .onSuccess { relays ->
-                    // Categorize relays based on read/write permissions
-                    val outbox = relays.filter { it.write }
-                    val inbox = relays.filter { it.read }
+                    // Normalize URLs (no trailing slash) then categorize by NIP-65
+                    val normalized = relays.map { it.copy(url = RelayStorageManager.normalizeRelayUrl(it.url)) }
+                    val outbox = normalized.filter { it.write }
+                    val inbox = normalized.filter { it.read }
+                    val current = _uiState.value
+                    // Only populate when outbox and inbox are empty so we don't overwrite user edits
+                    if (current.outboxRelays.isEmpty() && current.inboxRelays.isEmpty() && (outbox.isNotEmpty() || inbox.isNotEmpty())) {
+                        // Add outbox relays to the default (empty) category so user sees notes from outbox on first sign-in
+                        val defaultId = DefaultRelayCategories.getDefaultCategory().id
+                        val updatedCategories = current.relayCategories.map { cat ->
+                            if (cat.id == defaultId && cat.relays.isEmpty() && outbox.isNotEmpty()) {
+                                cat.copy(relays = outbox)
+                            } else {
+                                cat
+                            }
+                        }
+                        _uiState.value = current.copy(
+                            relayCategories = updatedCategories,
+                            outboxRelays = outbox,
+                            inboxRelays = inbox,
+                            isLoading = false
+                        )
+                        saveToStorage()
 
-                    _uiState.value = _uiState.value.copy(
-                        outboxRelays = outbox,
-                        inboxRelays = inbox,
-                        isLoading = false
-                    )
-                    saveToStorage()
+                        // Eagerly fetch NIP-11 info for all newly added relays so the
+                        // Relay Management screen shows info immediately
+                        viewModelScope.launch(Dispatchers.IO) {
+                            val nip11 = Nip11CacheManager.getInstance(storageManager.context)
+                            (outbox + inbox).map { it.url }.distinct().forEach { url ->
+                                try {
+                                    nip11.getRelayInfo(url, forceRefresh = true)
+                                } catch (e: Exception) {
+                                    Log.w("RelayMgmtVM", "Eager NIP-11 fetch failed for $url: ${e.message}")
+                                }
+                            }
+                        }
+                    } else {
+                        _uiState.value = current.copy(isLoading = false)
+                    }
                 }
                 .onFailure { exception ->
                     _uiState.value = _uiState.value.copy(

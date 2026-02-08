@@ -9,7 +9,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Manager for handling URL previews in notes
+ * Manager for handling URL previews in notes.
+ * Network and parsing run on Dispatchers.IO; only the resulting Note (with urlPreviews) is used on the main thread in note cards.
  */
 class UrlPreviewManager(
     private val urlPreviewService: UrlPreviewService,
@@ -21,6 +22,7 @@ class UrlPreviewManager(
      */
     suspend fun processNoteForUrlPreviews(note: Note): Note = withContext(Dispatchers.IO) {
         val urls = UrlDetector.findUrls(note.content)
+        val embeddedMedia = note.mediaUrls.toSet()
         
         if (urls.isEmpty()) {
             return@withContext note
@@ -28,8 +30,8 @@ class UrlPreviewManager(
         
         val urlPreviews = mutableListOf<UrlPreviewInfo>()
         
-        // Process up to 3 URLs to avoid performance issues
-        urls.take(3).forEach { url ->
+        // Process up to 3 URLs; skip URLs that are embedded as images (no link/preview for embedded media)
+        urls.filter { it !in embeddedMedia }.take(3).forEach { url ->
             try {
                 val cached = urlPreviewCache.get(url)
                 if (cached != null) {
@@ -105,6 +107,13 @@ class UrlPreviewManager(
      */
     fun getCacheStats() = urlPreviewCache.getStats()
 }
+
+
+
+
+
+
+
 
 
 

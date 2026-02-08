@@ -3,12 +3,13 @@ package com.example.views.repository
 import android.util.Log
 import com.example.views.data.Author
 import com.example.views.data.ThreadReply
-import com.vitorpamplona.quartz.nip01Core.relay.client.NostrClient
-import com.vitorpamplona.quartz.nip01Core.relay.client.NostrClientSubscription
+import com.example.views.relay.RelayConnectionStateMachine
+import com.example.views.relay.TemporarySubscriptionHandle
+import com.example.views.repository.ProfileMetadataCache
+import com.example.views.utils.UrlDetector
+import com.example.views.utils.extractPubkeysFromContent
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
-import com.vitorpamplona.quartz.nip01Core.relay.normalizer.NormalizedRelayUrl
 import com.vitorpamplona.quartz.nip01Core.core.Event
-import com.vitorpamplona.quartz.nip01Core.relay.sockets.okhttp.BasicOkHttpWebSocket
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -16,23 +17,23 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.delay
-import okhttp3.OkHttpClient
+import kotlinx.coroutines.launch
 
 /**
- * Repository for fetching and managing kind 1111 thread replies using Quartz NostrClient.
- * Handles threaded conversations following NIP-22 (Threaded Replies).
+ * Repository for fetching and managing kind 1111 thread replies using the shared
+ * RelayConnectionStateMachine (one-off subscription API). Handles threaded conversations
+ * following NIP-22 (Threaded Replies). Uses the same NostrClient as the feed to avoid
+ * duplicate connections to the same relays.
  *
- * Kind 1111 events are replies that:
- * - Reference the root note via "e" tags with "root" marker
- * - Reference the parent reply via "e" tags with "reply" marker
+ * Kind 1111 events are replies that (NIP-22 / RelayTools-style):
+ * - Reference the root thread via uppercase "E" tag or ["e", id, ..., "root"]
+ * - Reference the parent via lowercase "e" tag or ["e", id, ..., "reply"]
  * - Can be nested to create threaded conversations
  */
 class ThreadRepliesRepository {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val okHttpClient = OkHttpClient.Builder().build()
-    private val socketBuilder = BasicOkHttpWebSocket.Builder { _ -> okHttpClient }
-    private val nostrClient = NostrClient(socketBuilder, scope)
+    private val relayStateMachine = RelayConnectionStateMachine.getInstance()
 
     // Replies for a specific note ID
     private val _replies = MutableStateFlow<Map<String, List<ThreadReply>>>(emptyMap())
@@ -45,40 +46,38 @@ class ThreadRepliesRepository {
     val error: StateFlow<String?> = _error.asStateFlow()
 
     private var connectedRelays = listOf<String>()
-    private val activeSubscriptions = mutableMapOf<String, NostrClientSubscription>()
+    private var cacheRelayUrls = listOf<String>()
+    private val activeSubscriptions = mutableMapOf<String, TemporarySubscriptionHandle>()
+    private val profileCache = ProfileMetadataCache.getInstance()
+
+    /**
+     * Set cache relay URLs for kind-0 profile fetches (from RelayStorageManager.loadCacheRelays).
+     */
+    fun setCacheRelayUrls(urls: List<String>) {
+        cacheRelayUrls = urls
+    }
 
     companion object {
         private const val TAG = "ThreadRepliesRepository"
-        private const val REPLY_FETCH_TIMEOUT = 10000L
+        /** Short initial window; loading clears on first reply (live) or after this. Subscription stays open for more replies. */
+        private const val INITIAL_LOAD_WINDOW_MS = 1500L
     }
 
     /**
-     * Connect to relay URLs
+     * Set relay URLs for subsequent fetchRepliesForNote. Connection happens when subscription is created (subscription-first so client knows which relays to use).
      */
     fun connectToRelays(relayUrls: List<String>) {
-        Log.d(TAG, "Connecting to ${relayUrls.size} relays for thread replies")
+        Log.d(TAG, "Relay URLs set for thread replies: ${relayUrls.size}")
         connectedRelays = relayUrls
-
-        try {
-            nostrClient.connect()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error connecting client: ${e.message}", e)
-            _error.value = "Failed to connect: ${e.message}"
-        }
     }
 
     /**
-     * Disconnect from all relays and clean up subscriptions
+     * Cancel all reply subscriptions and clear state. Does not disconnect the shared client.
      */
     fun disconnectAll() {
-        Log.d(TAG, "Disconnecting from all relays")
-        try {
-            activeSubscriptions.values.forEach { it.destroy() }
-            activeSubscriptions.clear()
-            nostrClient.disconnect()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error disconnecting: ${e.message}", e)
-        }
+        Log.d(TAG, "Cleaning up kind 1111 reply subscriptions")
+        activeSubscriptions.values.forEach { it.cancel() }
+        activeSubscriptions.clear()
         connectedRelays = emptyList()
         _replies.value = emptyMap()
     }
@@ -105,40 +104,43 @@ class ThreadRepliesRepository {
         _error.value = null
 
         try {
-            // Close previous subscription for this note if exists
-            activeSubscriptions[noteId]?.destroy()
+            // Cancel previous subscriptions for this note if exists
+            activeSubscriptions[noteId]?.cancel()
+            activeSubscriptions.remove(noteId)
+            activeSubscriptions["$noteId:root"]?.cancel()
+            activeSubscriptions.remove("$noteId:root")
 
-            Log.d(TAG, "Fetching kind 1111 replies for note ${noteId.take(8)}... from ${targetRelays.size} relays")
+            Log.d(TAG, "Fetching kind 1111 replies for note ${noteId.take(8)}... from ${targetRelays.size} relays (shared client)")
 
-            // Create filter for kind 1111 replies
-            // Using "e" tag to find all replies that reference this note
-            val filter = Filter(
+            // Create filters for kind 1111 replies (NIP-22 root can be "e" or "E")
+            val lowerFilter = Filter(
                 kinds = listOf(1111),
-                tags = mapOf("e" to listOf(noteId)), // Find all replies referencing this note
+                tags = mapOf("e" to listOf(noteId)),
+                limit = limit
+            )
+            val upperFilter = Filter(
+                kinds = listOf(1111),
+                tags = mapOf("E" to listOf(noteId)),
                 limit = limit
             )
 
-            // Create relay map
-            val relayFilters = targetRelays.associate { url ->
-                NormalizedRelayUrl(url) to listOf(filter)
-            }
-
-            // Subscribe with event handler
-            val subscription = NostrClientSubscription(
-                client = nostrClient,
-                filter = { relayFilters },
-                onEvent = { event ->
-                    handleReplyEvent(noteId, event)
-                }
+            val lowerHandle = relayStateMachine.requestTemporarySubscription(
+                relayUrls = targetRelays,
+                filter = lowerFilter,
+                onEvent = { event -> handleReplyEvent(noteId, event) }
             )
+            val upperHandle = relayStateMachine.requestTemporarySubscription(
+                relayUrls = targetRelays,
+                filter = upperFilter,
+                onEvent = { event -> handleReplyEvent(noteId, event) }
+            )
+            activeSubscriptions[noteId] = lowerHandle
+            activeSubscriptions["$noteId:root"] = upperHandle
 
-            activeSubscriptions[noteId] = subscription
-
-            // Give it time to receive replies
-            delay(REPLY_FETCH_TIMEOUT)
+            // Clear loading after short window so UI shows live; subscription stays open for streaming replies
+            delay(INITIAL_LOAD_WINDOW_MS)
             _isLoading.value = false
-
-            Log.d(TAG, "Finished fetching replies for note ${noteId.take(8)}... (${getRepliesForNote(noteId).size} replies)")
+            Log.d(TAG, "Replies live for note ${noteId.take(8)}... (${getRepliesForNote(noteId).size} so far)")
 
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching replies: ${e.message}", e)
@@ -153,7 +155,9 @@ class ThreadRepliesRepository {
     private fun handleReplyEvent(noteId: String, event: Event) {
         try {
             if (event.kind == 1111) {
-                val reply = convertEventToThreadReply(event)
+                val reply = convertEventToThreadReply(event).let { r ->
+                    if (r.rootNoteId == null) r.copy(rootNoteId = noteId) else r
+                }
 
                 // Add reply to the collection for this note
                 val currentReplies = _replies.value[noteId]?.toMutableList() ?: mutableListOf()
@@ -162,9 +166,11 @@ class ThreadRepliesRepository {
                 if (!currentReplies.any { it.id == reply.id }) {
                     currentReplies.add(reply)
 
-                    // Update the flow with new replies
+                    // Update the flow with new replies (live update)
                     _replies.value = _replies.value + (noteId to currentReplies.sortedBy { it.timestamp })
 
+                    // Clear loading as soon as we have at least one reply so UI shows content immediately
+                    _isLoading.value = false
                     Log.d(TAG, "Added reply from ${reply.author.username}: ${reply.content.take(50)}... (Total: ${currentReplies.size})")
                 }
             }
@@ -178,15 +184,15 @@ class ThreadRepliesRepository {
      */
     private fun convertEventToThreadReply(event: Event): ThreadReply {
         val pubkeyHex = event.pubKey
-
-        // Use default author for now (should be enhanced with profile lookup)
-        val author = Author(
-            id = pubkeyHex,
-            username = pubkeyHex.take(8) + "...",
-            displayName = pubkeyHex.take(8) + "...",
-            avatarUrl = null,
-            isVerified = false
-        )
+        val author = profileCache.resolveAuthor(pubkeyHex)
+        if (profileCache.getAuthor(pubkeyHex) == null && cacheRelayUrls.isNotEmpty()) {
+            scope.launch { profileCache.requestProfiles(listOf(pubkeyHex), cacheRelayUrls) }
+        }
+        // Request kind-0 for pubkeys mentioned in content so @mentions resolve to display names
+        val contentPubkeys = extractPubkeysFromContent(event.content).filter { profileCache.getAuthor(it) == null }
+        if (contentPubkeys.isNotEmpty() && cacheRelayUrls.isNotEmpty()) {
+            scope.launch { profileCache.requestProfiles(contentPubkeys, cacheRelayUrls) }
+        }
 
         // Extract thread relationship from tags
         val tags = event.tags.map { it.toList() }
@@ -197,9 +203,10 @@ class ThreadRepliesRepository {
             .filter { tag -> tag.size >= 2 && tag[0] == "t" }
             .mapNotNull { tag -> tag.getOrNull(1) }
 
-        // Extract image URLs from content
-        val imageUrlPattern = Regex("""https?://[^\s]+\.(jpg|jpeg|png|gif|webp)""", RegexOption.IGNORE_CASE)
-        val mediaUrls = imageUrlPattern.findAll(event.content).map { it.value }.toList()
+        // Extract image and video URLs from content (embedded in card media area)
+        val mediaUrls = UrlDetector.findUrls(event.content)
+            .filter { UrlDetector.isImageUrl(it) || UrlDetector.isVideoUrl(it) }
+            .distinct()
 
         return ThreadReply(
             id = event.id,
@@ -214,7 +221,9 @@ class ThreadRepliesRepository {
             mediaUrls = mediaUrls,
             rootNoteId = rootId,
             replyToId = replyToId,
-            threadLevel = threadLevel
+            threadLevel = threadLevel,
+            // Per-event relay source not yet available from temporary subscription; leave empty so we don't show misleading "all relays" orbs
+            relayUrls = emptyList()
         )
     }
 
@@ -233,10 +242,30 @@ class ThreadRepliesRepository {
     }
 
     /**
+     * Update author in all reply lists when profile cache is updated.
+     */
+    fun updateAuthorInReplies(pubkey: String) {
+        val author = profileCache.getAuthor(pubkey) ?: return
+        val current = _replies.value
+        var updated = false
+        val keyLower = pubkey.lowercase()
+        val newMap = current.mapValues { (_, list) ->
+            val newList = list.map { reply ->
+                if (reply.author.id.lowercase() == keyLower) {
+                    updated = true
+                    reply.copy(author = author)
+                } else reply
+            }
+            newList
+        }
+        if (updated) _replies.value = newMap
+    }
+
+    /**
      * Clear replies for a specific note
      */
     fun clearRepliesForNote(noteId: String) {
-        activeSubscriptions[noteId]?.destroy()
+        activeSubscriptions[noteId]?.cancel()
         activeSubscriptions.remove(noteId)
         _replies.value = _replies.value - noteId
     }
@@ -245,7 +274,7 @@ class ThreadRepliesRepository {
      * Clear all replies
      */
     fun clearAllReplies() {
-        activeSubscriptions.values.forEach { it.destroy() }
+        activeSubscriptions.values.forEach { it.cancel() }
         activeSubscriptions.clear()
         _replies.value = emptyMap()
     }

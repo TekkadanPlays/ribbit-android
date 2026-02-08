@@ -42,7 +42,6 @@ fun UrlPreviewTest() {
             onNoteClick = {},
             onZap = { _, _ -> },
             onCustomZap = {},
-            onTestZap = {},
             onZapSettings = {}
         )
         
@@ -71,6 +70,13 @@ fun UrlPreviewTestPreview() {
         UrlPreviewTest()
     }
 }
+
+
+
+
+
+
+
 
 
 

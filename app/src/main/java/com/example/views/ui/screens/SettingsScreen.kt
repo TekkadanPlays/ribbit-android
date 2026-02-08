@@ -1,5 +1,7 @@
 package com.example.views.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -18,6 +20,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.example.views.ribbit.tsm.BuildConfig
+import com.example.views.repository.DebugEventStatsSnapshot
+import com.example.views.repository.NotesRepository
+import androidx.compose.runtime.collectAsState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,6 +79,17 @@ fun SettingsScreen(
             )
 
             SettingsItem(icon = Icons.Outlined.FavoriteBorder, title = "Support Ribbit", onClick = { /* TODO */ }, iconTint = Color(0xFFE57373))
+            val context = LocalContext.current
+            SettingsItem(
+                icon = Icons.Outlined.Lightbulb,
+                title = "Submit Feedback",
+                onClick = {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/TekkadanPlays/ribbit-android/discussions"))
+                    )
+                },
+                iconTint = Color(0xFFFFC107)
+            )
 
             HorizontalDivider(
                 thickness = 1.dp,
@@ -82,7 +99,46 @@ fun SettingsScreen(
             SettingsItem(icon = Icons.Outlined.BugReport, title = "Report a Bug", onClick = onBugReportClick)
             SettingsItem(icon = Icons.Outlined.Info, title = "About", onClick = { onNavigateTo("about") })
 
+            if (BuildConfig.DEBUG) {
+                HorizontalDivider(
+                    thickness = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                )
+                Text(
+                    text = "Debug",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(16.dp, 8.dp)
+                )
+                SettingsItem(icon = Icons.Outlined.Person, title = "Following (pubkeys)", onClick = { onNavigateTo("debug_follow_list") })
+                DebugEventStatsCard()
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun DebugEventStatsCard() {
+    val stats by NotesRepository.getInstance().debugEventStats.collectAsState(initial = DebugEventStatsSnapshot(0, 0, 0, 0, 0, 0, 0))
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Event stats (this session)",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "total=${stats.total}  md=${stats.mdPct()}%  img=${stats.imgPct()}%  vid=${stats.vidPct()}%  gif=${stats.gifPct()}%  imeta=${stats.imetaPct()}%  emoji=${stats.emojiPct()}%",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 4.dp)
+            )
         }
     }
 }

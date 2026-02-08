@@ -91,7 +91,7 @@ fun AppHeader(
                     // Show login option only for guests
                     if (isGuest && onLoginClick != null) {
                         DropdownMenuItem(
-                            text = { Text("Log In") },
+                            text = { Text("Login with Amber") },
                             leadingIcon = { Icon(Icons.Outlined.Login, contentDescription = null) },
                             onClick = { 
                                 onLoginClick()

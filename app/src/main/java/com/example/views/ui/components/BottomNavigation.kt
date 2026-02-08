@@ -50,6 +50,6 @@ enum class BottomNavDestinations(val route: String, val label: String, val icon:
     HOME("home", "Home", Icons.Default.Home),
     TOPICS("topics", "Topics", Icons.Default.Tag),
     RELAYS("relays", "Relays", Icons.Outlined.Language),
-    ANNOUNCEMENTS("announcements", "Announcements", Icons.Outlined.Campaign),
-    NOTIFICATIONS("notifications", "Notifications", Icons.Default.Notifications)
+    NOTIFICATIONS("notifications", "Notifications", Icons.Default.Notifications),
+    PROFILE("profile", "Profile", Icons.Outlined.Person)
 }

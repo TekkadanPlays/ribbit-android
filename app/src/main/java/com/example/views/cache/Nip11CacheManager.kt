@@ -11,12 +11,14 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import com.example.views.data.RelayInformation
+import com.example.views.utils.MemoryUtils
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
 /**
- * Manages persistent caching of NIP-11 relay information with 24-hour expiration
+ * Manages persistent caching of NIP-11 relay information with 24-hour expiration.
+ * Use getInstance(context) for process-wide singleton (e.g. from trim coordinator).
  */
 class Nip11CacheManager(private val context: Context) {
     companion object {
@@ -26,8 +28,17 @@ class Nip11CacheManager(private val context: Context) {
         private const val CACHE_TIMESTAMPS_KEY = "cache_timestamps"
         private const val CACHE_EXPIRY_HOURS = 24
         private val JSON = Json { ignoreUnknownKeys = true }
+
+        @Volatile
+        private var instance: Nip11CacheManager? = null
+
+        /** Process-wide singleton using application context. Use for trim coordinator. */
+        fun getInstance(context: Context): Nip11CacheManager =
+            instance ?: synchronized(this) {
+                instance ?: Nip11CacheManager(context.applicationContext).also { instance = it }
+            }
     }
-    
+
     private val sharedPrefs: SharedPreferences = context.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE)
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -145,9 +156,11 @@ class Nip11CacheManager(private val context: Context) {
     }
     
     /**
-     * Preload relay information for a list of URLs
+     * Preload relay information for a list of URLs.
+     * Skips when system is low on memory to avoid large allocations.
      */
     fun preloadRelayInfo(urls: List<String>, scope: CoroutineScope) {
+        if (MemoryUtils.isLowMemory(context)) return
         scope.launch(Dispatchers.IO) {
             urls.forEach { url ->
                 if (!hasCachedRelayInfo(url) || getStaleRelayUrls().contains(url)) {
@@ -181,7 +194,16 @@ class Nip11CacheManager(private val context: Context) {
     }
     
     /**
-     * Clear all cache data
+     * Clear only the in-memory cache to free RAM. Disk state is unchanged; data can be
+     * reloaded from storage on next access. Call from trim coordinator on memory pressure.
+     */
+    fun clearMemoryCache() {
+        memoryCache.clear()
+        Log.d(TAG, "🧹 Cleared NIP-11 memory cache (disk unchanged)")
+    }
+
+    /**
+     * Clear all cache data (memory and disk)
      */
     fun clearAllCache() {
         memoryCache.clear()

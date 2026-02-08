@@ -8,10 +8,15 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -44,7 +49,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import com.example.views.data.Note
-import com.example.views.data.SampleData
 import com.example.views.repository.TopicNote
 import com.example.views.ui.components.AdaptiveHeader
 import com.example.views.ui.components.BottomNavigationBar
@@ -60,6 +64,8 @@ import com.example.views.viewmodel.DashboardViewModel
 import com.example.views.viewmodel.AuthViewModel
 import com.example.views.viewmodel.RelayManagementViewModel
 import com.example.views.viewmodel.TopicsViewModel
+import com.example.views.relay.RelayConnectionStateMachine
+import com.example.views.relay.RelayState
 import com.example.views.repository.RelayRepository
 import com.example.views.repository.RelayStorageManager
 import androidx.compose.ui.platform.LocalContext
@@ -88,7 +94,7 @@ fun TopicsScreen(
     onSearchModeChange: (Boolean) -> Unit = {},
     onProfileClick: (String) -> Unit = {},
     onNavigateTo: (String) -> Unit = {},
-    onThreadClick: (Note) -> Unit = {},
+    onThreadClick: (Note, List<String>?) -> Unit = { _, _ -> },
     onScrollToTop: () -> Unit = {},
     listState: LazyListState = rememberLazyListState(),
     viewModel: DashboardViewModel = viewModel(),
@@ -100,6 +106,8 @@ fun TopicsScreen(
     onLoginClick: (() -> Unit)? = null,
     onTopAppBarStateChange: (TopAppBarState) -> Unit = {},
     initialTopAppBarState: TopAppBarState? = null,
+    onQrClick: () -> Unit = {},
+    onNavigateToCreateTopic: (String?) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -135,38 +143,38 @@ fun TopicsScreen(
     // Track if we've already loaded relays on this mount
     var hasLoadedRelays by remember { mutableStateOf(false) }
 
-    // Auto-load topics from default/favorite category on feed load
-    LaunchedEffect(relayCategories, currentAccount) {
+    // Auto-load topics: subscription = all relays, display = sidebar selection
+    LaunchedEffect(relayCategories, currentAccount, topicsFeedState.isGlobal, topicsFeedState.selectedCategoryId, topicsFeedState.selectedRelayUrl) {
         if (relayCategories.isNotEmpty() && !hasLoadedRelays) {
-            val favoriteCategory = relayCategories.firstOrNull { it.isFavorite }
-            if (favoriteCategory != null && favoriteCategory.relays.isNotEmpty()) {
-                val relayUrls = favoriteCategory.relays.map { it.url }
-                topicsViewModel.loadTopicsFromRelays(relayUrls)
+            val allUserRelayUrls = relayCategories.flatMap { it.relays }.map { it.url }.distinct()
+            val displayUrls = when {
+                topicsFeedState.isGlobal -> allUserRelayUrls
+                topicsFeedState.selectedCategoryId != null -> relayCategories
+                    .firstOrNull { it.id == topicsFeedState.selectedCategoryId }?.relays?.map { it.url } ?: emptyList()
+                topicsFeedState.selectedRelayUrl != null -> listOf(topicsFeedState.selectedRelayUrl!!)
+                else -> allUserRelayUrls
+            }
+            if (allUserRelayUrls.isNotEmpty()) {
+                topicsViewModel.loadTopicsFromRelays(allUserRelayUrls, displayUrls)
                 hasLoadedRelays = true
-            } else {
-                val defaultCategory = relayCategories.firstOrNull { it.isDefault && it.relays.isNotEmpty() }
-                    ?: relayCategories.firstOrNull { it.relays.isNotEmpty() }
-                if (defaultCategory != null) {
-                    val relayUrls = defaultCategory.relays.map { it.url }
-                    topicsViewModel.loadTopicsFromRelays(relayUrls)
-                    hasLoadedRelays = true
-                }
             }
         }
     }
 
     // Ensure relays are recalled when navigating back to topics feed
-    LaunchedEffect(Unit) {
-        if (!hasLoadedRelays && relayCategories.isNotEmpty()) {
-            if (topicsUiState.hashtagStats.isEmpty() && !topicsUiState.isLoading) {
-                val favoriteCategory = relayCategories.firstOrNull { it.isFavorite }
-                    ?: relayCategories.firstOrNull { it.isDefault && it.relays.isNotEmpty() }
-                    ?: relayCategories.firstOrNull { it.relays.isNotEmpty() }
-                if (favoriteCategory != null && favoriteCategory.relays.isNotEmpty()) {
-                    val relayUrls = favoriteCategory.relays.map { it.url }
-                    topicsViewModel.loadTopicsFromRelays(relayUrls)
-                    hasLoadedRelays = true
-                }
+    LaunchedEffect(Unit, relayCategories, topicsFeedState.isGlobal, topicsFeedState.selectedCategoryId, topicsFeedState.selectedRelayUrl) {
+        if (!hasLoadedRelays && relayCategories.isNotEmpty() && topicsUiState.hashtagStats.isEmpty() && !topicsUiState.isLoading) {
+            val allUserRelayUrls = relayCategories.flatMap { it.relays }.map { it.url }.distinct()
+            val displayUrls = when {
+                topicsFeedState.isGlobal -> allUserRelayUrls
+                topicsFeedState.selectedCategoryId != null -> relayCategories
+                    .firstOrNull { it.id == topicsFeedState.selectedCategoryId }?.relays?.map { it.url } ?: emptyList()
+                topicsFeedState.selectedRelayUrl != null -> listOf(topicsFeedState.selectedRelayUrl!!)
+                else -> allUserRelayUrls
+            }
+            if (allUserRelayUrls.isNotEmpty()) {
+                topicsViewModel.loadTopicsFromRelays(allUserRelayUrls, displayUrls)
+                hasLoadedRelays = true
             }
         }
     }
@@ -176,6 +184,28 @@ fun TopicsScreen(
         currentAccount?.toHexKey()?.let { pubkey ->
             relayViewModel?.fetchUserRelaysFromNetwork(pubkey)
         }
+    }
+
+    // Set cache relay URLs for kind-0 profile fetches when account is available
+    LaunchedEffect(currentAccount) {
+        currentAccount?.toHexKey()?.let { pubkey ->
+            val cacheUrls = storageManager.loadCacheRelays(pubkey).map { it.url }
+            if (cacheUrls.isNotEmpty()) topicsViewModel.setCacheRelayUrls(cacheUrls)
+        }
+    }
+
+    // Load follow list once when account/relays available; default All (topicsIsFollowing = false)
+    LaunchedEffect(currentAccount, relayCategories) {
+        currentAccount?.toHexKey()?.let { pubkey ->
+            val urls = relayCategories.flatMap { it.relays }.map { it.url }.distinct()
+            if (urls.isNotEmpty()) {
+                topicsViewModel.loadFollowListForTopics(pubkey, urls, topicsFeedState.topicsIsFollowing)
+            }
+        }
+    }
+    // Apply All vs Following when user toggles (uses cached follow list)
+    LaunchedEffect(topicsFeedState.topicsIsFollowing) {
+        topicsViewModel.setFollowFilterForTopics(topicsFeedState.topicsIsFollowing)
     }
 
     // Search state - using simple String instead of TextFieldValue
@@ -191,8 +221,16 @@ fun TopicsScreen(
     val selectedHashtag = topicsUiState.selectedHashtag
     val isViewingHashtagFeed = topicsUiState.isViewingHashtagFeed
 
+    // Restore selected topic when returning to Topics tab (persisted in FeedStateViewModel)
+    LaunchedEffect(topicsFeedState.selectedHashtag) {
+        topicsFeedState.selectedHashtag?.let { hashtag ->
+            topicsViewModel.selectHashtag(hashtag)
+        }
+    }
+
     // Handle back navigation for hashtag feed
     BackHandler(enabled = isViewingHashtagFeed) {
+        feedStateViewModel.clearTopicsSelectedHashtag()
         topicsViewModel.clearSelectedHashtag()
     }
 
@@ -219,7 +257,7 @@ fun TopicsScreen(
     }
 
     // Use Material3's built-in scroll behavior for top app bar
-    val topAppBarState = rememberTopAppBarState()
+    val topAppBarState = initialTopAppBarState ?: rememberTopAppBarState()
     val scrollBehavior = if (isSearchMode) {
         TopAppBarDefaults.pinnedScrollBehavior(topAppBarState)
     } else {
@@ -230,11 +268,8 @@ fun TopicsScreen(
     val isBottomNavVisible = true
 
     // Calculate total notification count for badge
-    val totalNotificationCount = remember {
-        // In a real app, this would come from a notification service
-        // For now, we'll use a sample count
-        6 // This matches the sample notifications we created
-    }
+    val notificationList by com.example.views.repository.NotificationsRepository.notifications.collectAsState(initial = emptyList())
+    val totalNotificationCount = notificationList.size
 
     // Notify parent of TopAppBarState changes for thread view inheritance
     LaunchedEffect(topAppBarState) {
@@ -267,22 +302,31 @@ fun TopicsScreen(
         relayCategories = relayCategories,
         feedState = topicsFeedState,
         selectedDisplayName = feedStateViewModel.getTopicsDisplayName(),
+        onQrClick = onQrClick,
         onItemClick = { itemId ->
             when {
+                itemId == "global" -> {
+                    feedStateViewModel.setTopicsGlobal()
+                    feedStateViewModel.setHomeGlobal()
+                    val allUrls = relayCategories.flatMap { it.relays }.map { it.url }.distinct()
+                    if (allUrls.isNotEmpty()) topicsViewModel.setDisplayFilterOnly(allUrls)
+                }
                 itemId.startsWith("relay_category:") -> {
                     val categoryId = itemId.removePrefix("relay_category:")
                     val category = relayCategories.firstOrNull { it.id == categoryId }
                     val relayUrls = category?.relays?.map { it.url } ?: emptyList()
                     if (relayUrls.isNotEmpty()) {
                         feedStateViewModel.setTopicsSelectedCategory(categoryId, category?.name)
-                        topicsViewModel.loadTopicsFromRelays(relayUrls)
+                        feedStateViewModel.setHomeSelectedCategory(categoryId, category?.name)
+                        topicsViewModel.setDisplayFilterOnly(relayUrls)
                     }
                 }
                 itemId.startsWith("relay:") -> {
                     val relayUrl = itemId.removePrefix("relay:")
                     val relay = relayCategories.flatMap { it.relays }.firstOrNull { it.url == relayUrl }
                     feedStateViewModel.setTopicsSelectedRelay(relayUrl, relay?.displayName)
-                    topicsViewModel.loadTopicsFromRelays(listOf(relayUrl))
+                    feedStateViewModel.setHomeSelectedRelay(relayUrl, relay?.displayName)
+                    topicsViewModel.setDisplayFilterOnly(listOf(relayUrl))
                 }
                 itemId == "user_profile" -> {
                     onNavigateTo("user_profile")
@@ -322,7 +366,7 @@ fun TopicsScreen(
                         onSearch = { /* Optional: Handle explicit search submission */ },
                         searchResults = searchResults,
                         onResultClick = { note ->
-                            onThreadClick(note)
+                            onThreadClick(note, null)
                             onSearchModeChange(false)
                             searchQuery = ""
                         },
@@ -349,7 +393,7 @@ fun TopicsScreen(
                         onSearchQueryChange = { },
                         onMenuClick = {
                             if (isViewingHashtagFeed) {
-                                // Back button when viewing hashtag feed
+                                feedStateViewModel.clearTopicsSelectedHashtag()
                                 topicsViewModel.clearSelectedHashtag()
                             } else {
                                 // Hamburger menu when viewing all hashtags
@@ -391,7 +435,11 @@ fun TopicsScreen(
                         userAvatarUrl = authState.userProfile?.picture,
                         scrollBehavior = scrollBehavior,
                         currentFeedView = currentFeedView,
-                        onFeedViewChange = { newFeedView -> currentFeedView = newFeedView }
+                        onFeedViewChange = { newFeedView -> currentFeedView = newFeedView },
+                        isTopicsFollowingFilter = topicsFeedState.topicsIsFollowing,
+                        onTopicsFollowingFilterChange = { feedStateViewModel.setTopicsFollowingFilter(it) },
+                        topicsSortOrder = topicsFeedState.topicsSortOrder,
+                        onTopicsSortOrderChange = { feedStateViewModel.setTopicsSortOrder(it) }
                     )
                 }
             },
@@ -421,6 +469,20 @@ fun TopicsScreen(
                         }
                     )
                 }
+            },
+            floatingActionButton = {
+                if (!isSearchMode) {
+                    val fabBottomBarOffset = (48 * topAppBarState.collapsedFraction).dp
+                    Box(modifier = Modifier.offset(y = fabBottomBarOffset)) {
+                        FloatingActionButton(
+                            onClick = { onNavigateToCreateTopic(selectedHashtag) },
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ) {
+                            Icon(Icons.Filled.Edit, contentDescription = "Create topic")
+                        }
+                    }
+                }
             }
         ) { paddingValues ->
             // Calculate dynamic content padding based on navigation bar state
@@ -444,9 +506,9 @@ fun TopicsScreen(
                 isRefreshing = isRefreshing,
                 onRefresh = {
                     isRefreshing = true
+                    topicsViewModel.refreshTopics()
                     scope.launch {
-                        delay(1500) // Simulate network refresh
-                        // Refresh logic would go here
+                        delay(800)
                         isRefreshing = false
                     }
                 },
@@ -461,8 +523,55 @@ fun TopicsScreen(
                     )
             ) {
                 // Topics/Hashtag Discovery Grid
-                if (topicsUiState.isLoading && topicsUiState.hashtagStats.isEmpty()) {
-                    // Loading state
+                if (topicsUiState.connectedRelays.isEmpty()) {
+                    // No relays configured
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CloudOff,
+                                contentDescription = "No Relays",
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.outline
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "No Relays Connected",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Open the sidebar and select a relay collection to discover topics",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(24.dp))
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        drawerState.open()
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Menu,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Open Sidebar")
+                            }
+                        }
+                    }
+                } else if (topicsUiState.isLoading && topicsUiState.hashtagStats.isEmpty()) {
+                    // Loading state - connecting to relays
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
@@ -471,7 +580,23 @@ fun TopicsScreen(
                             LoadingAnimation(indicatorSize = 32.dp)
                             Spacer(modifier = Modifier.height(16.dp))
                             Text(
-                                text = "Loading topics from relays...",
+                                text = "Connecting to relays...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else if (topicsUiState.isReceivingEvents && topicsUiState.hashtagStats.isEmpty()) {
+                    // Receiving events but haven't gotten any topics yet
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            LoadingAnimation(indicatorSize = 32.dp)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "Retrieving topics from ${topicsUiState.connectedRelays.size} relay${if (topicsUiState.connectedRelays.size > 1) "s" else ""}...",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -501,67 +626,210 @@ fun TopicsScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "Select relays from the sidebar to discover topics",
+                                text = "No topics found from the selected relay${if (topicsUiState.connectedRelays.size > 1) "s" else ""}. Try selecting different relays or check back later.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
                             )
                         }
                     }
-                } else if (!isViewingHashtagFeed) {
-                    // Hashtag list - full width cards
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(vertical = 8.dp)
-                    ) {
-                        items(
-                            items = topicsUiState.hashtagStats,
-                            key = { it.hashtag }
-                        ) { stats ->
-                            HashtagCard(
-                                stats = stats,
-                                isFavorited = false, // TODO: Track favorites
-                                onToggleFavorite = {
-                                    // TODO: Toggle favorite
-                                },
-                                onMenuClick = {
-                                    // TODO: Show menu
-                                },
-                                onClick = {
-                                    // Update state to show Kind 11 feed for this hashtag
-                                    topicsViewModel.selectHashtag(stats.hashtag)
-                                }
-                            )
-                        }
-                    }
                 } else {
-                    // Kind 11 feed for selected hashtag
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(vertical = 8.dp)
-                    ) {
-                        items(
-                            items = topicsUiState.topicsForSelectedHashtag,
-                            key = { it.id }
-                        ) { topic ->
-                            Kind11TopicCard(
-                                topic = topic,
-                                isFavorited = false,
-                                onToggleFavorite = {
-                                    // TODO: Implement favorite
-                                },
-                                onMenuClick = {
-                                    // TODO: Show menu
-                                },
-                                onClick = {
-                                    // Navigate to thread view with Kind 1111 replies
-                                    // Store that we came from topics screen
-                                    appViewModel.updateThreadSourceScreen("topics")
-                                    onThreadClick(topic.toNote())
+                    // Main content area
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        if (!isViewingHashtagFeed) {
+                            // Hashtag list - connection status, new topics, then full width cards
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(vertical = 8.dp)
+                            ) {
+                                // Connection status (same pattern as DashboardScreen)
+                                item(key = "topics_connection_status") {
+                                    val relayState = topicsUiState.relayState
+                                    val connectionText = when (relayState) {
+                                        is RelayState.Disconnected -> "Disconnected"
+                                        is RelayState.Connecting -> "Connecting…"
+                                        is RelayState.Connected -> "Connected"
+                                        is RelayState.Subscribed -> "Connected"
+                                        is RelayState.ConnectFailed -> "Connection failed" + (relayState.message?.let { ": $it" } ?: "")
+                                    }
+                                    val isConnecting = relayState is RelayState.Connecting
+                                    val isFailed = relayState is RelayState.ConnectFailed
+                                    val stateMachine = RelayConnectionStateMachine.getInstance()
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        color = when (relayState) {
+                                            is RelayState.Disconnected -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                                            is RelayState.Connecting -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                            is RelayState.ConnectFailed -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                                            else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                        }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                if (isConnecting) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(16.dp),
+                                                        strokeWidth = 2.dp
+                                                    )
+                                                    Spacer(Modifier.width(8.dp))
+                                                }
+                                                Text(
+                                                    text = buildString {
+                                                        append(connectionText)
+                                                        topicsUiState.relayCountSummary?.let { append(" · $it") }
+                                                    },
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            if (isFailed) {
+                                                TextButton(onClick = { stateMachine.requestRetry() }) {
+                                                    Text("Retry", style = MaterialTheme.typography.labelMedium)
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                            )
+                                // "x new topics" row (topics-only indicator)
+                                if (topicsUiState.newTopicsCount > 0) {
+                                    item(key = "new_topics_header") {
+                                        Surface(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                            shadowElevation = 2.dp
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable { topicsViewModel.refreshTopics() }
+                                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "${topicsUiState.newTopicsCount} new topic${if (topicsUiState.newTopicsCount == 1) "" else "s"}",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(
+                                                    text = "Tap to show",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                items(
+                                    items = topicsUiState.hashtagStats,
+                                    key = { it.hashtag }
+                                ) { stats ->
+                                    HashtagCard(
+                                        stats = stats,
+                                        isFavorited = false, // TODO: Track favorites
+                                        onToggleFavorite = {
+                                            // TODO: Toggle favorite
+                                        },
+                                        onMenuClick = {
+                                            // TODO: Show menu
+                                        },
+                                        onClick = {
+                                            feedStateViewModel.setTopicsSelectedHashtag(stats.hashtag)
+                                            topicsViewModel.selectHashtag(stats.hashtag)
+                                        }
+                                    )
+                                }
+                            }
+                        } else {
+                            // Kind 11 feed for selected hashtag, or empty state when no topics on this relay
+                            if (topicsUiState.topicsForSelectedHashtag.isEmpty() && !topicsUiState.isLoading && selectedHashtag != null) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.padding(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Tag,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(64.dp),
+                                            tint = MaterialTheme.colorScheme.outline
+                                        )
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                        Text(
+                                            text = "No topics for #$selectedHashtag on this relay",
+                                            style = MaterialTheme.typography.headlineSmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = "Try switching to global or view all topics",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        Spacer(modifier = Modifier.height(24.dp))
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Button(
+                                                onClick = {
+                                                    feedStateViewModel.clearTopicsSelectedHashtag()
+                                                    topicsViewModel.clearSelectedHashtag()
+                                                }
+                                            ) {
+                                                Text("View all topics")
+                                            }
+                                            OutlinedButton(
+                                                onClick = {
+                                                    feedStateViewModel.setTopicsGlobal()
+                                                    feedStateViewModel.setHomeGlobal()
+                                                    val allUrls = relayCategories.flatMap { it.relays }.map { it.url }.distinct()
+                                                    if (allUrls.isNotEmpty()) topicsViewModel.setDisplayFilterOnly(allUrls)
+                                                }
+                                            ) {
+                                                Text("Switch to global")
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                LazyColumn(
+                                    state = listState,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(vertical = 8.dp)
+                                ) {
+                                    items(
+                                        items = topicsUiState.topicsForSelectedHashtag,
+                                        key = { it.id }
+                                    ) { topic ->
+                                        Kind11TopicCard(
+                                            topic = topic,
+                                            isFavorited = false,
+                                            onToggleFavorite = {
+                                                // TODO: Implement favorite
+                                            },
+                                            onMenuClick = {
+                                                // TODO: Show menu
+                                            },
+                                            onClick = {
+                                                appViewModel.updateThreadSourceScreen("topics")
+                                                onThreadClick(topic.toNote(), topicsUiState.connectedRelays)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -599,6 +867,7 @@ fun TopicsScreen(
             onDismiss = { showWalletConnectDialog = false }
         )
     }
+
 }
 
 
@@ -641,7 +910,6 @@ private fun HashtagCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Tag icon
                 Icon(
                     imageVector = Icons.Default.Tag,
                     contentDescription = null,
@@ -851,7 +1119,7 @@ private fun Kind11TopicCard(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            // Karma count + Comment count
+            // Karma count + Reply count
             Row(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -870,7 +1138,7 @@ private fun Kind11TopicCard(
                     color = MaterialTheme.colorScheme.outline
                 )
                 Text(
-                    text = "${topic.replyCount} ${if (topic.replyCount == 1) "Comment" else "Comments"}",
+                    text = "${topic.replyCount} ${if (topic.replyCount == 1) "Reply" else "Replies"}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

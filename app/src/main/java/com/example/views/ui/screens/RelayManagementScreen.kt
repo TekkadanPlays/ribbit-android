@@ -83,10 +83,10 @@ private fun createRelayWithNip11Info(
     url: String,
     read: Boolean = true,
     write: Boolean = true,
-    nip11CacheManager: com.example.views.cache.Nip11CacheManager
+    nip11Retriever: com.example.views.cache.nip11.Nip11CachedRetriever
 ): UserRelay {
     val normalizedUrl = normalizeRelayUrl(url)
-    val cachedInfo = nip11CacheManager.getCachedRelayInfo(normalizedUrl)
+    val cachedInfo = nip11Retriever.getFromCache(normalizedUrl)
 
     return UserRelay(
         url = normalizedUrl,
@@ -94,8 +94,8 @@ private fun createRelayWithNip11Info(
         write = write,
         addedAt = System.currentTimeMillis(),
         info = cachedInfo,
-        isOnline = cachedInfo != null,
-        lastChecked = if (cachedInfo != null) System.currentTimeMillis() else 0L
+        isOnline = false,
+        lastChecked = System.currentTimeMillis()
     )
 }
 
@@ -106,10 +106,11 @@ fun RelayManagementScreen(
     relayRepository: RelayRepository,
     accountStateViewModel: AccountStateViewModel,
     topAppBarState: TopAppBarState = rememberTopAppBarState(),
+    onOpenRelayLog: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val nip11CacheManager = relayRepository.getNip11CacheManager()
+    val nip11Retriever = relayRepository.getNip11Retriever()
     val storageManager = remember { RelayStorageManager(context) }
 
     val viewModel: RelayManagementViewModel = viewModel {
@@ -276,7 +277,7 @@ fun RelayManagementScreen(
                                             url = normalizedUrl,
                                             read = true,
                                             write = true,
-                                            nip11CacheManager = nip11CacheManager
+                                            nip11Retriever = nip11Retriever
                                         )
                                         viewModel.addRelayToCategory(category.id, newRelay)
                                         categoryRelayInputs = categoryRelayInputs + (category.id to "")
@@ -311,7 +312,8 @@ fun RelayManagementScreen(
                                 },
                                 onSetFavorite = { categoryId ->
                                     viewModel.setFavoriteCategory(categoryId)
-                                }
+                                },
+                                onOpenRelayLog = onOpenRelayLog
                             )
 
                             HorizontalDivider(
@@ -383,7 +385,7 @@ fun RelayManagementScreen(
                                             url = normalizedUrl,
                                             read = true,
                                             write = true,
-                                            nip11CacheManager = nip11CacheManager
+                                            nip11Retriever = nip11Retriever
                                         )
                                         viewModel.addOutboxRelay(newRelay)
                                         outboxRelayUrl = ""
@@ -391,7 +393,8 @@ fun RelayManagementScreen(
                                     }
                                 }
                             },
-                            isLoading = uiState.isLoading
+                            isLoading = uiState.isLoading,
+                            onOpenRelayLog = onOpenRelayLog
                         )
 
                         HorizontalDivider(
@@ -423,7 +426,7 @@ fun RelayManagementScreen(
                                             url = normalizedUrl,
                                             read = true,
                                             write = true,
-                                            nip11CacheManager = nip11CacheManager
+                                            nip11Retriever = nip11Retriever
                                         )
                                         viewModel.addInboxRelay(newRelay)
                                         inboxRelayUrl = ""
@@ -431,7 +434,8 @@ fun RelayManagementScreen(
                                     }
                                 }
                             },
-                            isLoading = uiState.isLoading
+                            isLoading = uiState.isLoading,
+                            onOpenRelayLog = onOpenRelayLog
                         )
 
                         HorizontalDivider(
@@ -463,7 +467,7 @@ fun RelayManagementScreen(
                                             url = normalizedUrl,
                                             read = true,
                                             write = true,
-                                            nip11CacheManager = nip11CacheManager
+                                            nip11Retriever = nip11Retriever
                                         )
                                         viewModel.addCacheRelay(newRelay)
                                         cacheRelayUrl = ""
@@ -480,7 +484,8 @@ fun RelayManagementScreen(
                                     showDefaultConfirmation = true
                                 }
                             },
-                            isLoading = uiState.isLoading
+                            isLoading = uiState.isLoading,
+                            onOpenRelayLog = onOpenRelayLog
                         )
 
                         // Add consistent bottom spacing
@@ -565,7 +570,7 @@ fun RelayManagementScreen(
                             url = "wss://nos.lol",
                             read = true,
                             write = true,
-                            nip11CacheManager = nip11CacheManager
+                            nip11Retriever = nip11Retriever
                         )
                         viewModel.addCacheRelay(defaultRelay)
                         showDefaultConfirmation = false
@@ -736,7 +741,8 @@ private fun RelayCategorySectionWithAddButton(
     onRelayUrlChange: (String) -> Unit,
     onAddRelay: () -> Unit,
     onAddDefault: (() -> Unit)? = null,
-    isLoading: Boolean
+    isLoading: Boolean,
+    onOpenRelayLog: (String) -> Unit = {}
 ) {
     val focusManager = LocalFocusManager.current
     Column {
@@ -818,9 +824,9 @@ private fun RelayCategorySectionWithAddButton(
                 RelaySettingsItem(
                     relay = relay,
                     connectionStatus = RelayConnectionStatus.DISCONNECTED, // TODO: Track connection status per category
+                    onOpenRelayLog = onOpenRelayLog,
                     onRemove = { onRemoveRelay(relay.url) },
-                    onRefresh = { /* TODO: Implement refresh for category relays */ },
-                    onTestConnection = { /* TODO: Implement test for category relays */ }
+                    onRefresh = { /* TODO: Implement refresh for category relays */ }
                 )
 
                 // Only add divider if not the last item
@@ -847,7 +853,8 @@ private fun RelayCategorySection(
     onAddDefault: (() -> Unit)? = null,
     isLoading: Boolean,
     focusRequester: FocusRequester? = null,
-    onFocusChanged: ((Boolean) -> Unit)? = null
+    onFocusChanged: ((Boolean) -> Unit)? = null,
+    onOpenRelayLog: (String) -> Unit = {}
 ) {
     val focusManager = LocalFocusManager.current
     Column {
@@ -914,9 +921,9 @@ private fun RelayCategorySection(
                 RelaySettingsItem(
                     relay = relay,
                     connectionStatus = RelayConnectionStatus.DISCONNECTED, // TODO: Track connection status per category
+                    onOpenRelayLog = onOpenRelayLog,
                     onRemove = { onRemoveRelay(relay.url) },
-                    onRefresh = { /* TODO: Implement refresh for category relays */ },
-                    onTestConnection = { /* TODO: Implement test for category relays */ }
+                    onRefresh = { /* TODO: Implement refresh for category relays */ }
                 )
 
                 // Only add divider if not the last item
@@ -936,17 +943,15 @@ private fun RelayCategorySection(
 private fun RelaySettingsItem(
     relay: UserRelay,
     connectionStatus: RelayConnectionStatus,
+    onOpenRelayLog: (String) -> Unit,
     onRemove: () -> Unit,
-    onRefresh: () -> Unit,
-    onTestConnection: () -> Unit
+    onRefresh: () -> Unit
 ) {
-    var showInfoSheet by remember { mutableStateOf(false) }
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { showInfoSheet = true }
-            .padding(16.dp),
+            .clickable { onOpenRelayLog(relay.url) }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Relay icon - use NIP-11 icon if available, otherwise router icon
@@ -1011,17 +1016,6 @@ private fun RelaySettingsItem(
             }
 
             IconButton(
-                onClick = onTestConnection,
-                modifier = Modifier.size(40.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Wifi,
-                    contentDescription = "Test",
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            IconButton(
                 onClick = onRemove,
                 modifier = Modifier.size(40.dp)
             ) {
@@ -1034,13 +1028,6 @@ private fun RelaySettingsItem(
             }
         }
     }
-
-    // Info tray
-    RelayInfoTray(
-        relay = relay,
-        onDismiss = { showInfoSheet = false },
-        isVisible = showInfoSheet
-    )
 }
 
 
@@ -1198,7 +1185,8 @@ private fun RelayCategorySection(
     isLoading: Boolean,
     isExpanded: Boolean,
     onExpandToggle: () -> Unit,
-    onSetFavorite: (String) -> Unit
+    onSetFavorite: (String) -> Unit,
+    onOpenRelayLog: (String) -> Unit = {}
 ) {
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         // Category header - tap to expand/collapse
@@ -1334,9 +1322,9 @@ private fun RelayCategorySection(
                     RelaySettingsItem(
                         relay = relay,
                         connectionStatus = RelayConnectionStatus.DISCONNECTED,
+                        onOpenRelayLog = onOpenRelayLog,
                         onRemove = { onRemoveRelay(relay) },
-                        onRefresh = { },
-                        onTestConnection = { }
+                        onRefresh = { }
                     )
                     if (index < category.relays.size - 1) {
                         HorizontalDivider(thickness = 1.dp)

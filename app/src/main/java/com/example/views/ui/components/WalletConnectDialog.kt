@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.platform.LocalContext
+import com.example.views.repository.NwcConfigRepository
+import com.example.views.repository.NwcConfig
 
 /**
  * Dialog for configuring Nostr Wallet Connect (NWC) settings
@@ -30,19 +32,11 @@ fun WalletConnectDialog(
     onSettingsClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val sharedPreferences = remember {
-        context.getSharedPreferences("ribbit_prefs", android.content.Context.MODE_PRIVATE)
-    }
+    val initialConfig = remember { NwcConfigRepository.getConfig(context) }
 
-    var walletConnectPubkey by remember {
-        mutableStateOf(sharedPreferences.getString("nwc_pubkey", "") ?: "")
-    }
-    var walletConnectRelay by remember {
-        mutableStateOf(sharedPreferences.getString("nwc_relay", "") ?: "")
-    }
-    var walletConnectSecret by remember {
-        mutableStateOf(sharedPreferences.getString("nwc_secret", "") ?: "")
-    }
+    var walletConnectPubkey by remember { mutableStateOf(initialConfig.pubkey) }
+    var walletConnectRelay by remember { mutableStateOf(initialConfig.relay) }
+    var walletConnectSecret by remember { mutableStateOf(initialConfig.secret) }
     var isSecretVisible by remember { mutableStateOf(false) }
     val clipboardManager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
 
@@ -91,13 +85,7 @@ fun WalletConnectDialog(
                                 walletConnectRelay = ""
                                 walletConnectSecret = ""
 
-                                // Clear from SharedPreferences
-                                sharedPreferences.edit().apply {
-                                    remove("nwc_pubkey")
-                                    remove("nwc_relay")
-                                    remove("nwc_secret")
-                                    apply()
-                                }
+                                NwcConfigRepository.clearConfig(context)
                             }
                         ) {
                             Icon(
@@ -134,7 +122,7 @@ fun WalletConnectDialog(
                         Icon(
                             imageVector = Icons.Outlined.ContentPaste,
                             contentDescription = "Paste NWC URI",
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
@@ -204,13 +192,14 @@ fun WalletConnectDialog(
 
                     Button(
                         onClick = {
-                            // Save to SharedPreferences
-                            sharedPreferences.edit().apply {
-                                putString("nwc_pubkey", walletConnectPubkey)
-                                putString("nwc_relay", walletConnectRelay)
-                                putString("nwc_secret", walletConnectSecret)
-                                apply()
-                            }
+                            NwcConfigRepository.saveConfig(
+                                context,
+                                NwcConfig(
+                                    pubkey = walletConnectPubkey,
+                                    relay = walletConnectRelay,
+                                    secret = walletConnectSecret
+                                )
+                            )
 
                             onDismiss()
                         },

@@ -20,8 +20,11 @@ class ThreadStateHolder {
     // Map of threadId -> Map of commentId -> CommentState
     private val commentStates = mutableStateMapOf<String, MutableMap<String, CommentState>>()
 
-    // Map of threadId -> expanded controls comment ID
+    // Map of threadId -> expanded controls comment ID (for comment-thread UI)
     private val expandedControls = mutableStateMapOf<String, String?>()
+
+    // Map of threadId -> expanded controls reply ID (for reply list: tap to show like/reply/zap row)
+    private val expandedReplyControls = mutableStateMapOf<String, String?>()
 
     data class ScrollState(
         val firstVisibleItemIndex: Int = 0,
@@ -67,12 +70,25 @@ class ThreadStateHolder {
     }
 
     /**
+     * Get expanded controls reply ID for a thread (which reply card shows the action row)
+     */
+    fun getExpandedReplyControls(threadId: String): String? = expandedReplyControls[threadId]
+
+    /**
+     * Set expanded controls reply ID for a thread
+     */
+    fun setExpandedReplyControls(threadId: String, replyId: String?) {
+        expandedReplyControls[threadId] = replyId
+    }
+
+    /**
      * Clear state for a specific thread (optional cleanup)
      */
     fun clearThreadState(threadId: String) {
         scrollStates.remove(threadId)
         commentStates.remove(threadId)
         expandedControls.remove(threadId)
+        expandedReplyControls.remove(threadId)
     }
 }
 

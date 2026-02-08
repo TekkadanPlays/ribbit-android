@@ -157,7 +157,7 @@ private fun getModernMenuItems(isSignedIn: Boolean): List<ModernSidebarMenuItem>
     } else {
         // Guest: show Login and Settings only
         listOf(
-            ModernSidebarMenuItem("login", "Log In", Icons.Outlined.Login),
+            ModernSidebarMenuItem("login", "Login with Amber", Icons.Outlined.Login),
             ModernSidebarMenuItem("settings", "Settings", Icons.Outlined.Settings)
         )
     }

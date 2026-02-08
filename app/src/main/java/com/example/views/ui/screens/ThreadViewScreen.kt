@@ -79,8 +79,13 @@ fun ThreadViewScreen(
     onShare: (String) -> Unit = {},
     onComment: (String) -> Unit = {},
     onProfileClick: (String) -> Unit = {},
+    onImageTap: (Note, List<String>, Int) -> Unit = { _, _, _ -> },
+    onOpenImageViewer: (List<String>, Int) -> Unit = { _, _ -> },
+    onVideoClick: (List<String>, Int) -> Unit = { _, _ -> },
+    onReact: (Note, String) -> Unit = { _, _ -> },
     onCommentLike: (String) -> Unit = {},
     onCommentReply: (String) -> Unit = {},
+    accountNpub: String? = null,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -154,10 +159,15 @@ fun ThreadViewScreen(
                             onLike = onLike,
                             onShare = onShare,
                             onComment = onComment,
+                            onReact = onReact,
                             onProfileClick = onProfileClick,
                             onNoteClick = { /* Already on thread */ },
+                            onImageTap = onImageTap,
+                            onOpenImageViewer = onOpenImageViewer,
+                            onVideoClick = onVideoClick,
                             // ✅ MAIN NOTE ZAP AWARENESS: Pass zap menu state to main note
                             shouldCloseZapMenus = shouldCloseZapMenus,
+                            accountNpub = accountNpub,
                             modifier = Modifier.fillMaxWidth()
                         )
                         
@@ -181,7 +191,6 @@ fun ThreadViewScreen(
                             onProfileClick = onProfileClick,
                             onZap = { commentId, amount -> /* TODO: Handle zap */ },
                             onCustomZap = { commentId -> /* TODO: Handle custom zap */ },
-                            onTestZap = { commentId -> /* TODO: Handle test zap */ },
                             onZapSettings = { showZapConfigDialog = true },
                             depth = 0,
                             commentStates = commentStates,
@@ -229,7 +238,6 @@ private fun CommentThreadItem(
     onProfileClick: (String) -> Unit,
     onZap: (String, Long) -> Unit = { _, _ -> },
     onCustomZap: (String) -> Unit = {},
-    onTestZap: (String) -> Unit = {},
     onZapSettings: () -> Unit = {},
     depth: Int,
     commentStates: MutableMap<String, CommentState>,
@@ -276,7 +284,6 @@ private fun CommentThreadItem(
             onProfileClick = onProfileClick,
             onZap = onZap,
             onCustomZap = onCustomZap,
-            onTestZap = onTestZap,
             onZapSettings = onZapSettings,
             isControlsExpanded = isControlsExpanded,
             onToggleControls = { onExpandControls(commentId) },
@@ -305,7 +312,6 @@ private fun CommentThreadItem(
                     onProfileClick = onProfileClick,
                     onZap = onZap,
                     onCustomZap = onCustomZap,
-                    onTestZap = onTestZap,
                     onZapSettings = onZapSettings,
                     depth = depth + 1,
                     commentStates = commentStates,
@@ -340,7 +346,6 @@ private fun CommentCard(
     onProfileClick: (String) -> Unit,
     onZap: (String, Long) -> Unit = { _, _ -> },
     onCustomZap: (String) -> Unit = {},
-    onTestZap: (String) -> Unit = {},
     onZapSettings: () -> Unit = {},
     isControlsExpanded: Boolean,
     onToggleControls: () -> Unit,
@@ -578,27 +583,6 @@ private fun CommentCard(
                                         )
                                     )
                                 }
-                                
-                                // Test zap chip
-                                FilterChip(
-                                    selected = false,
-                                    onClick = {
-                                        onExpandZapMenu(commentId) // Close menu using shared state
-                                        onTestZap(comment.id)
-                                    },
-                                    label = { Text("TEST") },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Filled.BugReport,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                                        labelColor = MaterialTheme.colorScheme.onSurface
-                                    )
-                                )
                                 
                                 // Edit zap amounts chip
                                 FilterChip(

@@ -18,6 +18,14 @@ data class AppState(
     val selectedNote: Note? = null,
     val previousScreen: String? = null,
     val threadSourceScreen: String? = null,
+    /** Relay URLs to use for thread replies when opened from a feed (e.g. topics). Null = use default/favorite category. */
+    val threadRelayUrls: List<String>? = null,
+    /** When non-null, navigate to image viewer with these URLs and initial index. */
+    val imageViewerUrls: List<String>? = null,
+    val imageViewerInitialIndex: Int = 0,
+    /** When non-null, navigate to video viewer with these URLs and initial index. */
+    val videoViewerUrls: List<String>? = null,
+    val videoViewerInitialIndex: Int = 0,
     val threadScrollPosition: Int = 0,
     val threadExpandedComments: Set<String> = emptySet(),
     val threadExpandedControls: String? = null,
@@ -26,7 +34,9 @@ data class AppState(
     val userProfileScrollPosition: Int = 0,
     val backPressCount: Int = 0,
     val showExitSnackbar: Boolean = false,
-    val isExitWindowActive: Boolean = false
+    val isExitWindowActive: Boolean = false,
+    /** Note being replied to (shown at top of reply compose screen). Cleared after navigation. */
+    val replyToNote: Note? = null
 )
 
 class AppViewModel : ViewModel() {
@@ -55,6 +65,30 @@ class AppViewModel : ViewModel() {
 
     fun updateThreadSourceScreen(screen: String?) {
         _appState.value = _appState.value.copy(threadSourceScreen = screen)
+    }
+
+    fun updateThreadRelayUrls(urls: List<String>?) {
+        _appState.value = _appState.value.copy(threadRelayUrls = urls)
+    }
+
+    fun openImageViewer(urls: List<String>, initialIndex: Int = 0) {
+        _appState.value = _appState.value.copy(imageViewerUrls = urls, imageViewerInitialIndex = initialIndex.coerceIn(0, urls.size - 1))
+    }
+
+    fun clearImageViewer() {
+        _appState.value = _appState.value.copy(imageViewerUrls = null, imageViewerInitialIndex = 0)
+    }
+
+    fun setReplyToNote(note: Note?) {
+        _appState.value = _appState.value.copy(replyToNote = note)
+    }
+
+    fun openVideoViewer(urls: List<String>, initialIndex: Int = 0) {
+        _appState.value = _appState.value.copy(videoViewerUrls = urls, videoViewerInitialIndex = initialIndex.coerceIn(0, urls.size - 1))
+    }
+
+    fun clearVideoViewer() {
+        _appState.value = _appState.value.copy(videoViewerUrls = null, videoViewerInitialIndex = 0)
     }
 
     fun updateThreadScrollPosition(position: Int) {
@@ -146,6 +180,7 @@ class AppViewModel : ViewModel() {
                 val sourceScreen = currentState.threadSourceScreen ?: "dashboard"
                 updateCurrentScreen(sourceScreen)
                 updateThreadSourceScreen(null)
+                updateThreadRelayUrls(null)
                 sourceScreen
             }
             currentState.currentScreen == "profile" -> {

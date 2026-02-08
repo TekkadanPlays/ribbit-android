@@ -21,6 +21,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.example.views.repository.NwcConfigRepository
+import com.example.views.repository.NwcConfig
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,31 +34,23 @@ fun AccountPreferencesScreen(
     val context = LocalContext.current
     val currentAccount by accountStateViewModel.currentAccount.collectAsState()
     
-    // Use account-specific preferences
-    val sharedPreferences = remember(currentAccount?.npub) {
-        val prefsName = if (currentAccount?.npub != null) {
-            "ribbit_prefs_${currentAccount!!.npub.replace("npub1", "").take(8)}"
-        } else {
-            "ribbit_prefs_guest"
-        }
-        context.getSharedPreferences(prefsName, android.content.Context.MODE_PRIVATE)
-    }
+    val initialConfig = remember { NwcConfigRepository.getConfig(context) }
 
     var showWalletConnectDialog by remember { mutableStateOf(false) }
     var walletConnectPubkey by remember {
-        mutableStateOf(sharedPreferences.getString("nwc_pubkey", "") ?: "")
+        mutableStateOf(initialConfig.pubkey)
     }
     var walletConnectRelay by remember {
-        mutableStateOf(sharedPreferences.getString("nwc_relay", "") ?: "")
+        mutableStateOf(initialConfig.relay)
     }
     var walletConnectSecret by remember {
-        mutableStateOf(sharedPreferences.getString("nwc_secret", "") ?: "")
+        mutableStateOf(initialConfig.secret)
     }
     var isWalletConnected by remember {
         mutableStateOf(
-            sharedPreferences.getString("nwc_pubkey", "")?.isNotEmpty() == true &&
-            sharedPreferences.getString("nwc_relay", "")?.isNotEmpty() == true &&
-            sharedPreferences.getString("nwc_secret", "")?.isNotEmpty() == true
+            initialConfig.pubkey.isNotEmpty() &&
+            initialConfig.relay.isNotEmpty() &&
+            initialConfig.secret.isNotEmpty()
         )
     }
 
@@ -117,13 +111,10 @@ fun AccountPreferencesScreen(
                 walletConnectSecret = secret
                 isWalletConnected = pubkey.isNotEmpty() && relay.isNotEmpty() && secret.isNotEmpty()
 
-                // Save to SharedPreferences
-                sharedPreferences.edit().apply {
-                    putString("nwc_pubkey", pubkey)
-                    putString("nwc_relay", relay)
-                    putString("nwc_secret", secret)
-                    apply()
-                }
+                NwcConfigRepository.saveConfig(
+                    context,
+                    NwcConfig(pubkey = pubkey, relay = relay, secret = secret)
+                )
 
                 showWalletConnectDialog = false
             },
@@ -133,13 +124,7 @@ fun AccountPreferencesScreen(
                 walletConnectSecret = ""
                 isWalletConnected = false
 
-                // Clear from SharedPreferences
-                sharedPreferences.edit().apply {
-                    remove("nwc_pubkey")
-                    remove("nwc_relay")
-                    remove("nwc_secret")
-                    apply()
-                }
+                NwcConfigRepository.clearConfig(context)
 
                 showWalletConnectDialog = false
             }
@@ -215,8 +200,12 @@ private fun WalletConnectDialog(
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.surface
+            modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight(),
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 8.dp
         ) {
             Column(
                 modifier = Modifier
@@ -240,12 +229,12 @@ private fun WalletConnectDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Single paste button for full NWC URI - right aligned
+                // Paste NWC URI - right aligned clipboard icon
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    OutlinedButton(
+                    IconButton(
                         onClick = {
                             val clipData = clipboardManager.primaryClip
                             if (clipData != null && clipData.itemCount > 0) {
@@ -257,7 +246,6 @@ private fun WalletConnectDialog(
                                         walletRelay = parsed.relay
                                         walletSecret = parsed.secret
                                     } else {
-                                        // If parsing fails, just paste into first field
                                         walletPubkey = text
                                     }
                                 }
@@ -267,10 +255,8 @@ private fun WalletConnectDialog(
                         Icon(
                             imageVector = Icons.Outlined.ContentPaste,
                             contentDescription = "Paste NWC URI",
-                            modifier = Modifier.size(18.dp)
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Paste NWC")
                     }
                 }
 

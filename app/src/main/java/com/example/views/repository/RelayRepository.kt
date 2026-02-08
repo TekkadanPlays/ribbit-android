@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -15,12 +17,16 @@ import com.example.views.data.UserRelay
 import com.example.views.data.RelayInformation
 import com.example.views.data.RelayConnectionStatus
 import com.example.views.data.RelayHealth
-import com.example.views.cache.Nip11CacheManager
+import com.example.views.cache.nip11.Nip11CachedRetriever
+import com.example.views.relay.RelayConnectionStateMachine
+import com.vitorpamplona.quartz.nip01Core.core.Event
+import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Repository for managing user relays and NIP-11 information
@@ -34,12 +40,12 @@ class RelayRepository(private val context: Context) {
     }
 
     private val sharedPrefs: SharedPreferences = context.getSharedPreferences(RELAYS_PREFS, Context.MODE_PRIVATE)
-    private val nip11CacheManager = Nip11CacheManager(context)
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
         .build()
+    private val nip11Retriever = Nip11CachedRetriever(httpClient)
 
     // StateFlow for reactive UI updates
     private val _relays = MutableStateFlow<List<UserRelay>>(emptyList())
@@ -51,8 +57,8 @@ class RelayRepository(private val context: Context) {
 
     init {
         loadRelaysFromStorage()
-        // Start background refresh of stale NIP-11 data
-        startBackgroundRefresh()
+        // Preload NIP-11 info for existing relays
+        preloadRelayInfo()
     }
 
     /**
@@ -69,18 +75,18 @@ class RelayRepository(private val context: Context) {
                 return@withContext Result.failure(Exception("Relay already exists"))
             }
 
-            // Check cache first for immediate NIP-11 info
-            val cachedInfo = nip11CacheManager.getCachedRelayInfo(normalizedUrl)
+            // Get cached NIP-11 info immediately (returns empty state if not cached)
+            val cachedInfo = nip11Retriever.getFromCache(normalizedUrl)
 
-            // Create new relay with cached NIP-11 info if available
+            // Create new relay with cached/empty NIP-11 info
             val newRelay = UserRelay(
                 url = normalizedUrl,
                 read = read,
                 write = write,
                 addedAt = System.currentTimeMillis(),
                 info = cachedInfo,
-                isOnline = cachedInfo != null,
-                lastChecked = if (cachedInfo != null) System.currentTimeMillis() else 0L
+                isOnline = false,
+                lastChecked = System.currentTimeMillis()
             )
 
             // Add to list immediately for fast UI response
@@ -90,21 +96,20 @@ class RelayRepository(private val context: Context) {
             // Persist to storage
             saveRelaysToStorage(updatedRelays)
 
-            Log.d(TAG, "✅ Added relay: $normalizedUrl ${if (cachedInfo != null) "(with cached NIP-11)" else "(fetching NIP-11)"}")
+            Log.d(TAG, "✅ Added relay: $normalizedUrl (loading NIP-11 info)")
 
-            // Fetch fresh NIP-11 information in background if not cached or stale
-            if (cachedInfo == null || nip11CacheManager.getStaleRelayUrls().contains(normalizedUrl)) {
-                kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                    try {
-                        val freshInfo = nip11CacheManager.getRelayInfo(normalizedUrl, forceRefresh = true)
-
+            // Fetch fresh NIP-11 information immediately in background
+            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                nip11Retriever.loadRelayInfo(
+                    relayUrl = normalizedUrl,
+                    onInfo = { freshInfo ->
                         // Update the relay with fresh NIP-11 info
                         val currentRelays = _relays.value
                         val relayIndex = currentRelays.indexOfFirst { it.url == normalizedUrl }
                         if (relayIndex != -1) {
                             val updatedRelay = currentRelays[relayIndex].copy(
                                 info = freshInfo,
-                                isOnline = freshInfo != null,
+                                isOnline = true,
                                 lastChecked = System.currentTimeMillis()
                             )
                             val updatedList = currentRelays.toMutableList().apply {
@@ -114,10 +119,11 @@ class RelayRepository(private val context: Context) {
                             saveRelaysToStorage(updatedList)
                             Log.d(TAG, "✅ Updated relay with fresh NIP-11 info: $normalizedUrl")
                         }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "⚠️ Failed to fetch NIP-11 info for $normalizedUrl: ${e.message}")
+                    },
+                    onError = { url, errorCode, errorMsg ->
+                        Log.w(TAG, "⚠️ Failed to fetch NIP-11 info for $url: $errorCode - $errorMsg")
                     }
-                }
+                )
             }
 
             Result.success(newRelay)
@@ -195,11 +201,20 @@ class RelayRepository(private val context: Context) {
 
             val relay = existingRelays[relayIndex]
 
-            // Force refresh from cache manager
-            val freshInfo = nip11CacheManager.getRelayInfo(url, forceRefresh = true)
+            // Force refresh from NIP-11 retriever
+            var freshInfo: RelayInformation? = null
+            nip11Retriever.forceRefresh(
+                relayUrl = url,
+                onInfo = { info ->
+                    freshInfo = info
+                },
+                onError = { _, errorCode, errorMsg ->
+                    Log.w(TAG, "⚠️ Failed to force refresh $url: $errorCode - $errorMsg")
+                }
+            )
 
             val updatedRelay = relay.copy(
-                info = freshInfo,
+                info = freshInfo ?: relay.info,
                 isOnline = freshInfo != null,
                 lastChecked = System.currentTimeMillis()
             )
@@ -264,33 +279,35 @@ class RelayRepository(private val context: Context) {
     }
 
     /**
-     * Get NIP-11 cache manager for external access
+     * Get NIP-11 cached retriever for external access
      */
-    fun getNip11CacheManager(): Nip11CacheManager = nip11CacheManager
+    fun getNip11Retriever(): Nip11CachedRetriever = nip11Retriever
 
     /**
-     * Start background refresh of stale NIP-11 data
+     * Preload NIP-11 information for existing relays
      */
-    private fun startBackgroundRefresh() {
+    private fun preloadRelayInfo() {
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             try {
                 // Small delay to let the app initialize
                 kotlinx.coroutines.delay(2000)
 
-                // Refresh stale relay information
-                nip11CacheManager.refreshStaleRelays(
-                    scope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO)
-                ) {
-                    Log.d(TAG, "🎉 Background NIP-11 refresh completed")
-                }
-
                 // Preload relay info for current relays
                 val currentRelays = _relays.value
-                val relayUrls = currentRelays.map { it.url }
-                nip11CacheManager.preloadRelayInfo(relayUrls, kotlinx.coroutines.CoroutineScope(Dispatchers.IO))
+                Log.d(TAG, "📦 Preloading NIP-11 info for ${currentRelays.size} relays")
+
+                currentRelays.forEach { relay ->
+                    try {
+                        nip11Retriever.preload(relay.url)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "⚠️ Failed to preload ${relay.url}: ${e.message}")
+                    }
+                }
+
+                Log.d(TAG, "🎉 NIP-11 preload completed")
 
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Background refresh failed: ${e.message}", e)
+                Log.e(TAG, "❌ Preload failed: ${e.message}", e)
             }
         }
     }
@@ -348,27 +365,68 @@ class RelayRepository(private val context: Context) {
     }
 
     /**
-     * Fetch user's relay list from the network using NIP-65
+     * Fetch user's relay list from the network using NIP-65 (kind 10002).
+     * Uses cache relays from RelayStorageManager for the given pubkey.
      */
     suspend fun fetchUserRelayList(pubkey: String): Result<List<UserRelay>> = withContext(Dispatchers.IO) {
         try {
-            // TODO: Implement NIP-65 relay list fetching from network
-            // This would query kind 10002 events from bootstrap relays
-            // For now, return empty list as placeholder
-            Log.d(TAG, "📡 Fetching relay list for pubkey: ${pubkey.take(8)}...")
-
-            // Placeholder implementation - in production this would:
-            // 1. Connect to bootstrap relays
-            // 2. Query for kind 10002 events for the pubkey
-            // 3. Parse the relay list from the event tags
-            // 4. Return the list of relays
-
-            Result.success(emptyList())
-
+            val storageManager = RelayStorageManager(context)
+            val cacheUrls = storageManager.loadCacheRelays(pubkey).map { it.url }
+            if (cacheUrls.isEmpty()) {
+                Log.d(TAG, "📡 No cache relays for pubkey ${pubkey.take(8)}..., skipping NIP-65 fetch")
+                return@withContext Result.success(emptyList())
+            }
+            Log.d(TAG, "📡 Fetching NIP-65 relay list for pubkey: ${pubkey.take(8)}... from ${cacheUrls.size} cache relays")
+            val filter = Filter(
+                kinds = listOf(10002),
+                authors = listOf(pubkey),
+                limit = 1
+            )
+            val latestEventRef = AtomicReference<Event?>(null)
+            val stateMachine = RelayConnectionStateMachine.getInstance()
+            val handle = stateMachine.requestTemporarySubscription(cacheUrls, filter) { event ->
+                if (event.kind == 10002) {
+                    latestEventRef.getAndUpdate { current ->
+                        if (current == null || event.createdAt > current.createdAt) event else current
+                    }
+                }
+            }
+            delay(5000L)
+            handle.cancel()
+            val event = latestEventRef.get()
+            if (event == null) {
+                Log.d(TAG, "📡 No kind 10002 event found for pubkey ${pubkey.take(8)}...")
+                return@withContext Result.success(emptyList())
+            }
+            val relays = parseNip65RelayTags(event)
+            Log.d(TAG, "📡 NIP-65 parsed ${relays.size} relays for pubkey ${pubkey.take(8)}...")
+            Result.success(relays)
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to fetch relay list: ${e.message}", e)
             Result.failure(e)
         }
+    }
+
+    /** Parse NIP-65 "r" tags: ["r", url] or ["r", url, "read"] or ["r", url, "write"]. No marker = both read and write. */
+    private fun parseNip65RelayTags(event: Event): List<UserRelay> {
+        val result = mutableListOf<UserRelay>()
+        for (tag in event.tags) {
+            val list = tag.toList()
+            if (list.isEmpty() || list[0] != "r") continue
+            val url = list.getOrNull(1)?.takeIf { it.isNotBlank() } ?: continue
+            val normalizedUrl = normalizeRelayUrl(url)
+            val marker = list.getOrNull(2)?.lowercase()
+            val read = marker != "write"
+            val write = marker != "read"
+            result.add(
+                UserRelay(
+                    url = normalizedUrl,
+                    read = read,
+                    write = write
+                )
+            )
+        }
+        return result
     }
 
     /**

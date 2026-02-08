@@ -8,10 +8,11 @@ import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Cache for URL previews to avoid repeated network requests
+ * Cache for URL previews to avoid repeated network requests.
+ * Singleton so it can be trimmed from AppMemoryTrimmer on memory pressure.
  */
-class UrlPreviewCache {
-    
+object UrlPreviewCache {
+
     private val cache = LruCache<String, UrlPreviewInfo>(50) // Cache up to 50 previews
     private val loadingStates = ConcurrentHashMap<String, UrlPreviewState>()
     private val mutex = Mutex()

@@ -57,6 +57,14 @@ class AmberSignerManager(private val context: Context) {
             ),
             Permission(
                 type = CommandType.SIGN_EVENT,
+                kind = 3 // Contact list (NIP-02 follow/unfollow)
+            ),
+            Permission(
+                type = CommandType.SIGN_EVENT,
+                kind = 7 // Reactions (NIP-25)
+            ),
+            Permission(
+                type = CommandType.SIGN_EVENT,
                 kind = 22242 // NIP-42 auth events
             ),
             Permission(

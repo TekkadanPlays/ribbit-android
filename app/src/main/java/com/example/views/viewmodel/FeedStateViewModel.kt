@@ -34,10 +34,39 @@ class FeedStateViewModel : ViewModel() {
     }
 
     /**
-     * Set selected relay category for home feed
+     * Set global feed for home (all relays). Does not change the Following feed filter.
+     */
+    fun setHomeGlobal() {
+        _homeFeedState.value = _homeFeedState.value.copy(
+            isGlobal = true,
+            selectedCategoryId = null,
+            selectedCategoryName = null,
+            selectedRelayUrl = null,
+            selectedRelayName = null
+        )
+    }
+
+    /**
+     * Set or clear the Following feed filter (independent of relay selection).
+     * When true, only notes from followed users are shown; when false, all notes from selected relay(s) are shown.
+     */
+    fun setHomeFollowingFilter(enabled: Boolean) {
+        _homeFeedState.value = _homeFeedState.value.copy(isFollowing = enabled)
+    }
+
+    /**
+     * Set home feed sort order (Latest = by time, Popular = by engagement).
+     */
+    fun setHomeSortOrder(sortOrder: HomeSortOrder) {
+        _homeFeedState.value = _homeFeedState.value.copy(homeSortOrder = sortOrder)
+    }
+
+    /**
+     * Set selected relay category for home feed (does not change isFollowing).
      */
     fun setHomeSelectedCategory(categoryId: String?, categoryName: String?) {
         _homeFeedState.value = _homeFeedState.value.copy(
+            isGlobal = false,
             selectedCategoryId = categoryId,
             selectedCategoryName = categoryName,
             selectedRelayUrl = null,
@@ -50,6 +79,7 @@ class FeedStateViewModel : ViewModel() {
      */
     fun setHomeSelectedRelay(relayUrl: String?, relayName: String?) {
         _homeFeedState.value = _homeFeedState.value.copy(
+            isGlobal = false,
             selectedCategoryId = null,
             selectedCategoryName = null,
             selectedRelayUrl = relayUrl,
@@ -58,10 +88,38 @@ class FeedStateViewModel : ViewModel() {
     }
 
     /**
+     * Set or clear the Following filter for topics feed (same idea as home).
+     */
+    fun setTopicsFollowingFilter(enabled: Boolean) {
+        _topicsFeedState.value = _topicsFeedState.value.copy(topicsIsFollowing = enabled)
+    }
+
+    /**
+     * Set topics feed sort order (Latest / Popular).
+     */
+    fun setTopicsSortOrder(sortOrder: TopicsSortOrder) {
+        _topicsFeedState.value = _topicsFeedState.value.copy(topicsSortOrder = sortOrder)
+    }
+
+    /**
+     * Set global feed for topics (all relays)
+     */
+    fun setTopicsGlobal() {
+        _topicsFeedState.value = _topicsFeedState.value.copy(
+            isGlobal = true,
+            selectedCategoryId = null,
+            selectedCategoryName = null,
+            selectedRelayUrl = null,
+            selectedRelayName = null
+        )
+    }
+
+    /**
      * Set selected relay category for topics feed
      */
     fun setTopicsSelectedCategory(categoryId: String?, categoryName: String?) {
         _topicsFeedState.value = _topicsFeedState.value.copy(
+            isGlobal = false,
             selectedCategoryId = categoryId,
             selectedCategoryName = categoryName,
             selectedRelayUrl = null,
@@ -74,10 +132,31 @@ class FeedStateViewModel : ViewModel() {
      */
     fun setTopicsSelectedRelay(relayUrl: String?, relayName: String?) {
         _topicsFeedState.value = _topicsFeedState.value.copy(
+            isGlobal = false,
             selectedCategoryId = null,
             selectedCategoryName = null,
             selectedRelayUrl = relayUrl,
             selectedRelayName = relayName
+        )
+    }
+
+    /**
+     * Set selected topic (hashtag) for topics feed so it persists across navigation.
+     */
+    fun setTopicsSelectedHashtag(hashtag: String?) {
+        _topicsFeedState.value = _topicsFeedState.value.copy(
+            selectedHashtag = hashtag,
+            isViewingHashtagFeed = hashtag != null
+        )
+    }
+
+    /**
+     * Clear selected topic and return to topics explorer list.
+     */
+    fun clearTopicsSelectedHashtag() {
+        _topicsFeedState.value = _topicsFeedState.value.copy(
+            selectedHashtag = null,
+            isViewingHashtagFeed = false
         )
     }
 
@@ -128,14 +207,15 @@ class FeedStateViewModel : ViewModel() {
     }
 
     /**
-     * Get display name for current home feed selection
+     * Get display name for current relay selection only (Global vs category vs relay). Following filter is separate.
      */
     fun getHomeDisplayName(): String {
         val state = _homeFeedState.value
         return when {
-            state.selectedCategoryName != null -> state.selectedCategoryName
-            state.selectedRelayName != null -> state.selectedRelayName
-            else -> "All Relays"
+            state.isGlobal -> "Global"
+            state.selectedCategoryName != null -> state.selectedCategoryName!!
+            state.selectedRelayName != null -> state.selectedRelayName!!
+            else -> "Global"
         }
     }
 
@@ -145,33 +225,59 @@ class FeedStateViewModel : ViewModel() {
     fun getTopicsDisplayName(): String {
         val state = _topicsFeedState.value
         return when {
-            state.selectedCategoryName != null -> state.selectedCategoryName
-            state.selectedRelayName != null -> state.selectedRelayName
-            else -> "All Relays"
+            state.isGlobal -> "Global"
+            state.selectedCategoryName != null -> state.selectedCategoryName!!
+            state.selectedRelayName != null -> state.selectedRelayName!!
+            else -> "Global"
         }
     }
 }
+
+/** Home feed sort order: Latest (by time) or Popular (by engagement). */
+enum class HomeSortOrder { Latest, Popular }
+
+/** Topics feed sort order: Latest or Popular. */
+enum class TopicsSortOrder { Latest, Popular }
 
 /**
  * State for a single feed (Home or Topics)
  */
 data class FeedState(
-    // Selected relay category
+    // Global feed = all relays from all categories (default on launch)
+    val isGlobal: Boolean = true,
+
+    // When true, home feed shows only notes from followed users (kind-3); when false, shows all (Global).
+    val isFollowing: Boolean = true,
+
+    // Home feed sort: Latest (default) or Popular
+    val homeSortOrder: HomeSortOrder = HomeSortOrder.Latest,
+
+    // Topics: When true, only topics from followed users; when false, all. Default All (inverted from Home).
+    val topicsIsFollowing: Boolean = false,
+
+    // Topics feed sort: Latest (default) or Popular
+    val topicsSortOrder: TopicsSortOrder = TopicsSortOrder.Latest,
+
+    // Selected relay category (when not global)
     val selectedCategoryId: String? = null,
     val selectedCategoryName: String? = null,
 
-    // Selected individual relay
+    // Selected individual relay (when not global)
     val selectedRelayUrl: String? = null,
     val selectedRelayName: String? = null,
 
-    // Expanded categories in sidebar
+    // Expanded categories in sidebar (UI only; do not trigger feed reload)
     val expandedCategories: Set<String> = emptySet(),
 
     // Scroll position
     val scrollPosition: ScrollPosition = ScrollPosition(),
 
     // Sidebar drawer state
-    val isSidebarOpen: Boolean = false
+    val isSidebarOpen: Boolean = false,
+
+    // Topics: selected hashtag and whether viewing that hashtag's feed (persists across tab switch)
+    val selectedHashtag: String? = null,
+    val isViewingHashtagFeed: Boolean = false
 )
 
 /**

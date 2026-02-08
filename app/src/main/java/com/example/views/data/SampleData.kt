@@ -1,5 +1,9 @@
 package com.example.views.data
 
+/**
+ * Sample data for @Preview composables only. Not used at runtime.
+ * Runtime feed and thread data come from relays (NotesRepository, Kind1RepliesRepository).
+ */
 object SampleData {
     val sampleAuthors = listOf(
         Author(
