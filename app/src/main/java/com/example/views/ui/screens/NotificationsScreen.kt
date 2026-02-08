@@ -29,21 +29,28 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.views.data.Author
+import com.example.views.data.NotificationData
+import com.example.views.data.NotificationType
 import com.example.views.data.Note
-import com.example.views.data.SampleData
-import com.example.views.ui.components.ModernSearchBar
-import com.example.views.ui.components.NoteCard
-import java.text.SimpleDateFormat
-import java.util.*
+import com.example.views.repository.NotificationsRepository
+import com.example.views.repository.ProfileMetadataCache
+import com.example.views.ui.components.ProfilePicture
+import com.example.views.utils.normalizeAuthorIdForCache
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.collect
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotificationsScreen(
     onBackClick: () -> Unit,
     onNoteClick: (Note) -> Unit = {},
+    /** When user taps a reply notification, open thread at root (rootNoteId, replyKind, optional replyNoteId to scroll to). */
+    onOpenThreadForRootId: (rootNoteId: String, replyKind: Int, replyNoteId: String?) -> Unit = { _, _, _ -> },
     onLike: (String) -> Unit = {},
     onShare: (String) -> Unit = {},
     onComment: (String) -> Unit = {},
@@ -52,19 +59,43 @@ fun NotificationsScreen(
     topAppBarState: TopAppBarState = rememberTopAppBarState(),
     modifier: Modifier = Modifier
 ) {
-    // Notification view state
+    // Real notifications from NotificationsRepository (Amethyst-style p-tag subscription)
+    val allNotifications by NotificationsRepository.notifications.collectAsState(initial = emptyList())
+
+    // Mark all as seen when user opens the notifications screen so badge clears
+    LaunchedEffect(Unit) {
+        NotificationsRepository.markAllAsSeen()
+    }
+
+    // Batch-request profiles for all notification and note authors when list is shown/updated
+    val profileCache = ProfileMetadataCache.getInstance()
+    val cacheRelayUrls = NotificationsRepository.getCacheRelayUrls()
+    LaunchedEffect(allNotifications, cacheRelayUrls) {
+        if (cacheRelayUrls.isEmpty()) return@LaunchedEffect
+        val authorIds = allNotifications.flatMap { n ->
+            buildList {
+                n.author?.id?.let { add(normalizeAuthorIdForCache(it)) }
+                (n.targetNote ?: n.note)?.author?.id?.let { add(normalizeAuthorIdForCache(it)) }
+            }
+        }.distinct().filter { it.isNotBlank() }
+        if (authorIds.isNotEmpty()) profileCache.requestProfiles(authorIds, cacheRelayUrls)
+    }
+
     var currentNotificationView by remember { mutableStateOf("All") }
     var notificationDropdownExpanded by remember { mutableStateOf(false) }
 
-    // Calculate notification counts for badges
-    val allNotifications = createSampleNotifications()
-    val notificationCounts = remember(allNotifications) {
+    val seenIds by NotificationsRepository.seenIds.collectAsState(initial = emptySet())
+    val notificationCounts = remember(allNotifications, seenIds) {
+        val unseen = { n: NotificationData -> n.id !in seenIds }
         mapOf(
-            "All" to allNotifications.size,
-            "Likes" to allNotifications.count { it.type == NotificationType.LIKE },
-            "Replies" to allNotifications.count { it.type == NotificationType.REPLY },
-            "Mentions" to allNotifications.count { it.type == NotificationType.MENTION },
-            "Follows" to allNotifications.count { it.type == NotificationType.FOLLOW }
+            "All" to allNotifications.count(unseen),
+            "Likes" to allNotifications.count { it.type == NotificationType.LIKE && unseen(it) },
+            "Replies" to allNotifications.count { it.type == NotificationType.REPLY && unseen(it) },
+            "Thread replies" to allNotifications.count { it.type == NotificationType.REPLY && (it.replyKind == null || it.replyKind == 1) && unseen(it) },
+            "Topic replies" to allNotifications.count { it.type == NotificationType.REPLY && it.replyKind == 1111 && unseen(it) },
+            "Mentions" to allNotifications.count { it.type == NotificationType.MENTION && unseen(it) },
+            "Reposts" to allNotifications.count { it.type == NotificationType.REPOST && unseen(it) },
+            "Zaps" to allNotifications.count { it.type == NotificationType.ZAP && unseen(it) }
         )
     }
 
@@ -112,8 +143,11 @@ fun NotificationsScreen(
                                 "All" -> Icons.Default.Notifications
                                 "Likes" -> Icons.Default.Favorite
                                 "Replies" -> Icons.Outlined.Reply
+                                "Thread replies" -> Icons.Outlined.Reply
+                                "Topic replies" -> Icons.Outlined.Chat
                                 "Mentions" -> Icons.Outlined.AlternateEmail
-                                "Follows" -> Icons.Default.PersonAdd
+                                "Reposts" -> Icons.Default.Repeat
+                                "Zaps" -> Icons.Default.Bolt
                                 else -> Icons.Default.Notifications
                             }
 
@@ -236,6 +270,72 @@ fun NotificationsScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        Text("Thread replies")
+                                        if ((notificationCounts["Thread replies"] ?: 0) > 0) {
+                                            Badge(
+                                                containerColor = MaterialTheme.colorScheme.primary,
+                                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                            ) {
+                                                Text(
+                                                    text = (notificationCounts["Thread replies"] ?: 0).toString(),
+                                                    style = MaterialTheme.typography.labelSmall
+                                                )
+                                            }
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Outlined.Reply,
+                                        contentDescription = null,
+                                        tint = if (currentNotificationView == "Thread replies") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                onClick = {
+                                    currentNotificationView = "Thread replies"
+                                    notificationDropdownExpanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("Topic replies")
+                                        if ((notificationCounts["Topic replies"] ?: 0) > 0) {
+                                            Badge(
+                                                containerColor = MaterialTheme.colorScheme.primary,
+                                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                            ) {
+                                                Text(
+                                                    text = (notificationCounts["Topic replies"] ?: 0).toString(),
+                                                    style = MaterialTheme.typography.labelSmall
+                                                )
+                                            }
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Outlined.Chat,
+                                        contentDescription = null,
+                                        tint = if (currentNotificationView == "Topic replies") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                onClick = {
+                                    currentNotificationView = "Topic replies"
+                                    notificationDropdownExpanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                         Text("Mentions")
                                         if (notificationCounts["Mentions"]!! > 0) {
                                             Badge(
@@ -269,29 +369,56 @@ fun NotificationsScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text("Follows")
-                                        if (notificationCounts["Follows"]!! > 0) {
+                                        Text("Reposts")
+                                        (notificationCounts["Reposts"] ?: 0).takeIf { it > 0 }?.let { count ->
                                             Badge(
                                                 containerColor = MaterialTheme.colorScheme.primary,
                                                 contentColor = MaterialTheme.colorScheme.onPrimary
                                             ) {
-                                                Text(
-                                                    text = notificationCounts["Follows"].toString(),
-                                                    style = MaterialTheme.typography.labelSmall
-                                                )
+                                                Text(text = count.toString(), style = MaterialTheme.typography.labelSmall)
                                             }
                                         }
                                     }
                                 },
                                 leadingIcon = {
                                     Icon(
-                                        Icons.Default.PersonAdd,
+                                        Icons.Default.Repeat,
                                         contentDescription = null,
-                                        tint = if (currentNotificationView == "Follows") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        tint = if (currentNotificationView == "Reposts") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 },
                                 onClick = {
-                                    currentNotificationView = "Follows"
+                                    currentNotificationView = "Reposts"
+                                    notificationDropdownExpanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("Zaps")
+                                        (notificationCounts["Zaps"] ?: 0).takeIf { it > 0 }?.let { count ->
+                                            Badge(
+                                                containerColor = MaterialTheme.colorScheme.primary,
+                                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                            ) {
+                                                Text(text = count.toString(), style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Bolt,
+                                        contentDescription = null,
+                                        tint = if (currentNotificationView == "Zaps") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                onClick = {
+                                    currentNotificationView = "Zaps"
                                     notificationDropdownExpanded = false
                                 }
                             )
@@ -321,15 +448,34 @@ fun NotificationsScreen(
                 .fillMaxSize()
                 .consumeWindowInsets(paddingValues)
                 .padding(paddingValues),
-            contentPadding = PaddingValues(vertical = 8.dp)
+            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
         ) {
-            // Filter notifications based on selected view
             val filteredNotifications = when (currentNotificationView) {
                 "Likes" -> allNotifications.filter { it.type == NotificationType.LIKE }
                 "Replies" -> allNotifications.filter { it.type == NotificationType.REPLY }
+                "Thread replies" -> allNotifications.filter { it.type == NotificationType.REPLY && (it.replyKind == null || it.replyKind == 1) }
+                "Topic replies" -> allNotifications.filter { it.type == NotificationType.REPLY && it.replyKind == 1111 }
                 "Mentions" -> allNotifications.filter { it.type == NotificationType.MENTION }
-                "Follows" -> allNotifications.filter { it.type == NotificationType.FOLLOW }
+                "Reposts" -> allNotifications.filter { it.type == NotificationType.REPOST }
+                "Zaps" -> allNotifications.filter { it.type == NotificationType.ZAP }
                 else -> allNotifications
+            }
+
+            if (filteredNotifications.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (allNotifications.isEmpty()) "No notifications yet" else "No ${currentNotificationView.lowercase()}",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
             items(
@@ -339,6 +485,7 @@ fun NotificationsScreen(
                 NotificationItem(
                     notification = notification,
                     onNoteClick = onNoteClick,
+                    onOpenThreadForRootId = onOpenThreadForRootId,
                     onLike = onLike,
                     onShare = onShare,
                     onComment = onComment,
@@ -350,41 +497,155 @@ fun NotificationsScreen(
     }
 }
 
+private val placeholderAuthor = Author(
+    id = "",
+    username = "...",
+    displayName = "…",
+    avatarUrl = null,
+    isVerified = false
+)
+
+@Composable
+private fun NotificationNotePreview(
+    note: Note,
+    onProfileClick: (String) -> Unit
+) {
+    val profileCache = ProfileMetadataCache.getInstance()
+    val noteAuthorId = note.author.id
+    val noteCacheKey = remember(noteAuthorId) { normalizeAuthorIdForCache(noteAuthorId) }
+    var noteDisplayAuthor by remember(noteAuthorId) {
+        mutableStateOf(profileCache.getAuthor(noteCacheKey) ?: note.author)
+    }
+    LaunchedEffect(Unit) {
+        profileCache.getAuthor(noteCacheKey)?.let { noteDisplayAuthor = it }
+    }
+    LaunchedEffect(noteCacheKey) {
+        if (noteCacheKey.isBlank()) return@LaunchedEffect
+        profileCache.profileUpdated
+            .filter { it == noteCacheKey }
+            .collect { noteDisplayAuthor = profileCache.getAuthor(noteCacheKey) ?: noteDisplayAuthor }
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+        ),
+        shape = RoundedCornerShape(8.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ProfilePicture(
+                    author = noteDisplayAuthor,
+                    size = 20.dp,
+                    onClick = { onProfileClick(note.author.id) }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = noteDisplayAuthor.displayName.ifBlank { noteDisplayAuthor.id.take(8) + "…" },
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = note.content,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                lineHeight = 18.sp
+            )
+            if (note.mediaUrls.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    note.mediaUrls.take(4).forEach { url ->
+                        AsyncImage(
+                            model = url,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun NotificationItem(
     notification: NotificationData,
     onNoteClick: (Note) -> Unit,
+    onOpenThreadForRootId: (rootNoteId: String, replyKind: Int, replyNoteId: String?) -> Unit = { _, _, _ -> },
     onLike: (String) -> Unit,
     onShare: (String) -> Unit,
     onComment: (String) -> Unit,
     onProfileClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Modern thread-view inspired design
+    val profileCache = ProfileMetadataCache.getInstance()
+    val authorId = notification.author?.id ?: ""
+    val cacheKey = remember(authorId) { normalizeAuthorIdForCache(authorId) }
+    var displayAuthor by remember(authorId) {
+        mutableStateOf(profileCache.getAuthor(cacheKey) ?: notification.author ?: placeholderAuthor)
+    }
+    val actorPubkeys = notification.actorPubkeys
+    val actorAuthors = remember(actorPubkeys) {
+        actorPubkeys.take(3).map { pk ->
+            profileCache.getAuthor(pk) ?: placeholderAuthor.copy(
+                id = pk,
+                username = pk.take(8) + "...",
+                displayName = pk.take(8) + "..."
+            )
+        }
+    }
+    LaunchedEffect(Unit) {
+        profileCache.getAuthor(cacheKey)?.let { displayAuthor = it }
+    }
+    LaunchedEffect(cacheKey) {
+        if (cacheKey.isBlank()) return@LaunchedEffect
+        profileCache.profileUpdated
+            .filter { it == cacheKey }
+            .collect { displayAuthor = profileCache.getAuthor(cacheKey) ?: displayAuthor }
+    }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(IntrinsicSize.Min) // Critical for proper vertical lines
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = 4.dp, vertical = 6.dp)
             .clickable {
-                notification.note?.let { onNoteClick(it) }
+                NotificationsRepository.markAsSeen(notification.id)
+                when {
+                    notification.type == NotificationType.REPLY && notification.rootNoteId != null ->
+                        onOpenThreadForRootId(notification.rootNoteId!!, notification.replyKind ?: 1, notification.replyNoteId)
+                    notification.type == NotificationType.MENTION && notification.note != null ->
+                        onNoteClick(notification.note!!)
+                    notification.targetNote != null -> onNoteClick(notification.targetNote!!)
+                    notification.note != null -> onNoteClick(notification.note!!)
+                }
             }
     ) {
-        // Vertical line for visual hierarchy (like thread view)
         Box(
             modifier = Modifier
-                .width(3.dp)
+                .width(1.dp)
                 .fillMaxHeight()
                 .background(
                     when (notification.type) {
                         NotificationType.LIKE -> MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
                         NotificationType.REPLY -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f)
                         NotificationType.MENTION -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f)
-                        NotificationType.FOLLOW -> MaterialTheme.colorScheme.error.copy(alpha = 0.4f)
+                        NotificationType.REPOST -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                        NotificationType.ZAP -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.5f)
                     }
                 )
         )
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(4.dp))
 
         // Notification content
         Column(
@@ -407,38 +668,31 @@ private fun NotificationItem(
                 .padding(16.dp),
             verticalAlignment = Alignment.Top
         ) {
-                    // Notification icon with modern styling
-            Box(
-                modifier = Modifier
-                            .size(36.dp)
-                    .background(
-                        when (notification.type) {
-                            NotificationType.LIKE -> MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
-                            NotificationType.REPLY -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.1f)
-                            NotificationType.MENTION -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.1f)
-                            NotificationType.FOLLOW -> MaterialTheme.colorScheme.error.copy(alpha = 0.1f)
-                        },
-                        CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = when (notification.type) {
-                        NotificationType.LIKE -> Icons.Default.Favorite
-                                NotificationType.REPLY -> Icons.Outlined.Reply
-                        NotificationType.MENTION -> Icons.Outlined.AlternateEmail
-                        NotificationType.FOLLOW -> Icons.Default.PersonAdd
-                    },
-                    contentDescription = null,
-                    tint = when (notification.type) {
-                        NotificationType.LIKE -> MaterialTheme.colorScheme.primary
-                        NotificationType.REPLY -> MaterialTheme.colorScheme.secondary
-                        NotificationType.MENTION -> MaterialTheme.colorScheme.tertiary
-                        NotificationType.FOLLOW -> MaterialTheme.colorScheme.error
-                    },
-                            modifier = Modifier.size(18.dp)
-                )
-            }
+                    if (actorPubkeys.size > 1) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            actorAuthors.forEach { actor ->
+                                ProfilePicture(
+                                    author = actor,
+                                    size = 28.dp,
+                                    onClick = { onProfileClick(actor.id) }
+                                )
+                            }
+                            if (actorPubkeys.size > actorAuthors.size) {
+                                Text(
+                                    text = "+${actorPubkeys.size - actorAuthors.size}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.align(Alignment.CenterVertically)
+                                )
+                            }
+                        }
+                    } else {
+                        ProfilePicture(
+                            author = displayAuthor,
+                            size = 36.dp,
+                            onClick = { notification.author?.id?.let { onProfileClick(it) } }
+                        )
+                    }
 
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -467,167 +721,33 @@ private fun NotificationItem(
                 }
             }
 
-            // Note preview with modern styling (if exists)
-                notification.note?.let { note ->
+            // Reposter summary for consolidated reposts
+                if (notification.reposterPubkeys.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (notification.reposterPubkeys.size == 1) "1 person reposted" else "${notification.reposterPubkeys.size} people reposted",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                    )
+                }
+            // Target note (liked/zapped/reposted post) or reply content
+                val noteToShow = notification.targetNote ?: notification.note
+                noteToShow?.let { note ->
                     Spacer(modifier = Modifier.height(8.dp))
-
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                        ),
-                    shape = RoundedCornerShape(8.dp),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // Author avatar
-                                Box(
-                                    modifier = Modifier
-                                    .size(20.dp)
-                                        .background(
-                                            MaterialTheme.colorScheme.primary,
-                                            CircleShape
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = note.author.displayName.first().toString().uppercase(),
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = MaterialTheme.colorScheme.onPrimary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                Text(
-                                    text = note.author.displayName,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Medium
-                                ),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                Text(
-                                    text = "•",
-                                    style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                )
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                Text(
-                                    text = formatTimeAgo(note.timestamp),
-                                    style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Text(
-                                text = note.content,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            lineHeight = 18.sp
-                            )
+                    NotificationNotePreview(note = note, onProfileClick = onProfileClick)
+                }
+                notification.targetNoteId?.let { id ->
+                    if (notification.targetNote == null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Post ${id.take(8)}…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
                     }
                 }
             }
         }
-    }
-}
-
-// Data classes for notifications
-data class NotificationData(
-    val id: String,
-    val type: NotificationType,
-    val text: String,
-    val timeAgo: String,
-    val note: Note? = null,
-    val author: Author? = null
-)
-
-enum class NotificationType {
-    LIKE, REPLY, MENTION, FOLLOW
-}
-
-// Sample data
-private fun createSampleNotifications(): List<NotificationData> {
-    val sampleNotes = SampleData.sampleNotes
-    val sampleAuthors = sampleNotes.map { it.author }
-
-    return listOf(
-        NotificationData(
-            id = "1",
-            type = NotificationType.LIKE,
-            text = "Alice liked your post",
-            timeAgo = "2m ago",
-            note = sampleNotes[0],
-            author = sampleAuthors[0]
-        ),
-        NotificationData(
-            id = "2",
-            type = NotificationType.REPLY,
-            text = "Bob replied to your post",
-            timeAgo = "5m ago",
-            note = sampleNotes[1],
-            author = sampleAuthors[1]
-        ),
-        NotificationData(
-            id = "3",
-            type = NotificationType.MENTION,
-            text = "Charlie mentioned you in a post",
-            timeAgo = "1h ago",
-            note = sampleNotes[2],
-            author = sampleAuthors[2]
-        ),
-        NotificationData(
-            id = "4",
-            type = NotificationType.FOLLOW,
-            text = "Diana started following you",
-            timeAgo = "2h ago",
-            author = sampleAuthors[3]
-        ),
-        NotificationData(
-            id = "5",
-            type = NotificationType.LIKE,
-            text = "Eve liked your post",
-            timeAgo = "3h ago",
-            note = sampleNotes[4],
-            author = sampleAuthors[4]
-        ),
-        NotificationData(
-            id = "6",
-            type = NotificationType.REPLY,
-            text = "Frank replied to your post",
-            timeAgo = "5h ago",
-            note = sampleNotes[5],
-            author = sampleAuthors[5]
-        )
-    )
-}
-
-private fun formatTimeAgo(timestamp: Long): String {
-    val now = System.currentTimeMillis()
-    val diff = now - timestamp
-
-    return when {
-        diff < 60_000 -> "${diff / 1000}s ago"
-        diff < 3_600_000 -> "${diff / 60_000}m ago"
-        diff < 86_400_000 -> "${diff / 3_600_000}h ago"
-        else -> "${diff / 86_400_000}d ago"
-    }
 }
 
 @Preview(showBackground = true)

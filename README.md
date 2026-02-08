@@ -1,86 +1,37 @@
-# 🐸 Ribbit
+# Ribbit (Android)
 
-A modern social networking platform built with Jetpack Compose and Material Design 3.
+A Nostr client for Android built with Jetpack Compose and Material Design 3. Browse the relay feed, view threads and topic replies (kind-1 and kind-1111), manage relays, and receive notifications for replies, likes, reposts, and zaps.
 
-## Features
+## Prerequisites
 
-- **Modern UI**: Built with Jetpack Compose and Material Design 3
-- **Thread View**: Hierarchical comment system with visual thread lines
-- **State Preservation**: Maintains state across navigation and device rotation
-- **Profile Management**: User profiles with note feeds
-- **Search Functionality**: Find content and users
-- **Responsive Design**: Optimized for all screen sizes
-- **Performance**: Smooth scrolling and animations
+- **JDK 11** or later
+- **Android SDK** (API 35+)
+- Android Studio or command-line build tools
 
-## Screenshots
+## Build
 
-*Screenshots will be added here*
+Release APK:
 
-## Installation
+```bash
+./gradlew assembleRelease
+```
 
-### Via Obtanium (Recommended)
+Output: `app/build/outputs/apk/release/app-release.apk`
 
-1. Install [Obtanium](https://github.com/ImranR98/Obtainium) from F-Droid
-2. Add this repository: `https://github.com/TekkadanPlays/ribbit-android`
-3. Install Ribbit from Obtanium
+## Install
 
-### Manual Installation
+```bash
+adb install app/build/outputs/apk/release/app-release.apk
+```
 
-1. Download the latest APK from [Releases](https://github.com/TekkadanPlays/ribbit-android/releases)
-2. Enable "Install from unknown sources" in your device settings
-3. Install the APK
+## Obtanium
 
-## Building from Source
+You can install or update Ribbit via [Obtanium](https://obtanium.com/) using the app's update manifest:
 
-### Prerequisites
+- **Raw URL:** `https://raw.githubusercontent.com/TekkadanPlays/ribbit-android/main/obtanium.json`
 
-- Android Studio Hedgehog or later
-- JDK 11 or later
-- Android SDK 35+
-
-### Build Steps
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/TekkadanPlays/ribbit-android.git
-   cd ribbit-android
-   ```
-
-2. Open in Android Studio and sync the project
-
-3. Build the debug version:
-   ```bash
-   ./gradlew assembleDebug
-   ```
-
-4. Build the release version:
-   ```bash
-   ./gradlew assembleRelease
-   ```
-
-## Architecture
-
-- **UI**: Jetpack Compose with Material Design 3
-- **State Management**: ViewModel with StateFlow
-- **Navigation**: Custom navigation with state preservation
-- **Performance**: Optimized with Baseline Profiles and Strong Skipping Mode
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+Add this URL in Obtanium to get release updates and download the APK from GitHub Releases.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Author
-
-**Tekkadan**
-- Nostr: [npub12zqf55l7l9vsg5f6ssx5pq4f9dzu6hcmnepkm8ftj25fecy379jqkq99h8](https://njump.me/npub12zqf55l7l9vsg5f6ssx5pq4f9dzu6hcmnepkm8ftj25fecy379jqkq99h8)
-- UI made with 💚 by Tekkadan
-
-## Acknowledgments
-
-- Built with [Jetpack Compose](https://developer.android.com/jetpack/compose)
-- Designed with [Material Design 3](https://m3.material.io/)
-- Icons from [Material Icons](https://fonts.google.com/icons)
+MIT — see [LICENSE](LICENSE).

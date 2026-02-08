@@ -19,6 +19,26 @@
   "banner": "https://raw.githubusercontent.com/TekkadanPlays/ribbit-android/main/banner.png",
   "releases": [
     {
+      "version": "0.1.0",
+      "versionCode": 4,
+      "releaseDate": "2026-02-08",
+      "downloadUrl": "https://github.com/TekkadanPlays/ribbit-android/releases/download/v0.1.0/ribbit-v0.1.0.apk",
+      "changelog": "Thread UI polish (spacing, alignment). Notifications for topic replies (kind-1111) and thread replies (kind-1) with separate filters; open thread/topic with correct reply kind.",
+      "minSdk": 35,
+      "targetSdk": 36,
+      "packageId": "com.example.views.ribbit.tsm",
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ],
+      "features": [
+        "Thread polish - consistent spacing and line alignment",
+        "Topic and thread reply notifications (kind-1111 and kind-1)",
+        "Thread vs Topic reply filters in notifications",
+        "Open thread or topic from notification with correct reply chain"
+      ]
+    },
+    {
       "version": "0.0.3",
       "versionCode": 3,
       "releaseDate": "2025-01-22",
@@ -26,7 +46,7 @@
       "changelog": "Clean v0.0.3 release with Lightning Zaps and Wallet Connect functionality. Connect your Lightning wallet to send zaps to posts and comments.",
       "minSdk": 35,
       "targetSdk": 36,
-      "packageId": "com.example.views",
+      "packageId": "com.example.views.ribbit.tsm",
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"
