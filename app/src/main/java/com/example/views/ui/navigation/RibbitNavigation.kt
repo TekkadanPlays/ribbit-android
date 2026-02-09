@@ -1269,7 +1269,10 @@ fun RibbitNavigation(
                 }
 
                 composable("compose") {
-                    ComposeNoteScreen(onBack = { navController.popBackStack() })
+                    ComposeNoteScreen(
+                        onBack = { navController.popBackStack() },
+                        accountStateViewModel = accountStateViewModel
+                    )
                 }
 
                 composable(

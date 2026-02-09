@@ -30,7 +30,9 @@ data class ThreadReply(
     val threadLevel: Int = 0,            // Nesting level in thread (0 = direct reply to root)
 
     /** Relay URLs this reply was seen on; for relay orbs in thread view. */
-    val relayUrls: List<String> = emptyList()
+    val relayUrls: List<String> = emptyList(),
+    /** Nostr event kind (1 or 1111). Used for NIP-25 reaction "k" tag. */
+    val kind: Int = 1111
 ) {
     /**
      * Get short content preview (first 100 characters)
@@ -233,7 +235,8 @@ fun Note.toThreadReply(replyToId: String? = null, threadLevel: Int = 0): ThreadR
         rootNoteId = replyToId,
         replyToId = replyToId,
         threadLevel = threadLevel,
-        relayUrls = relayUrls.ifEmpty { listOfNotNull(relayUrl) }
+        relayUrls = relayUrls.ifEmpty { listOfNotNull(relayUrl) },
+        kind = kind
     )
 }
 
@@ -255,7 +258,8 @@ fun Note.toThreadReplyForThread(): ThreadReply = ThreadReply(
     rootNoteId = rootNoteId,
     replyToId = replyToId,
     threadLevel = 0,
-    relayUrls = relayUrls.ifEmpty { listOfNotNull(relayUrl) }
+    relayUrls = relayUrls.ifEmpty { listOfNotNull(relayUrl) },
+    kind = kind
 )
 
 /**
@@ -274,6 +278,7 @@ fun ThreadReply.toNote(): Note {
         hashtags = hashtags,
         mediaUrls = mediaUrls,
         relayUrl = relayUrls.firstOrNull(),
-        relayUrls = relayUrls
+        relayUrls = relayUrls,
+        kind = kind
     )
 }

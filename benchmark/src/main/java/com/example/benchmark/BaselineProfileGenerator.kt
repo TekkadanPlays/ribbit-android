@@ -35,7 +35,7 @@ class BaselineProfileGenerator {
 
     @Test
     fun generate() = rule.collect(
-        packageName = "com.example.views.ribbit.tsm.debug", // Match app applicationId (debug variant)
+        packageName = "com.example.views.ribbit.debug", // Match app applicationId (debug variant)
         maxIterations = 15, // Run multiple times to get stable results
         stableIterations = 3, // Must be stable for 3 iterations
         includeInStartupProfile = true

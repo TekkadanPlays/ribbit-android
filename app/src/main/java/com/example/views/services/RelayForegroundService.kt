@@ -10,7 +10,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.example.views.ribbit.tsm.BuildConfig
+import com.example.views.ribbit.BuildConfig
 import com.example.views.relay.RelayConnectionStateMachine
 import com.example.views.repository.NotesRepository
 import kotlinx.coroutines.CoroutineScope

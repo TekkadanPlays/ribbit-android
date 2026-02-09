@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalUriHandler
 import com.example.views.data.Author
 import com.example.views.repository.ProfileMetadataCache
-import com.example.views.ribbit.tsm.BuildConfig
+import com.example.views.ribbit.BuildConfig
 import com.example.views.ui.components.ProfilePicture
 import com.vitorpamplona.quartz.nip19Bech32.Nip19Parser
 import com.vitorpamplona.quartz.nip19Bech32.entities.NPub

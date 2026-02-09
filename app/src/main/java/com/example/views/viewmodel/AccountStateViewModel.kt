@@ -1,5 +1,6 @@
 package com.example.views.viewmodel
 
+import android.app.Activity
 import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -22,6 +23,7 @@ import com.vitorpamplona.quartz.nip19Bech32.bech32.bechToBytes
 import com.vitorpamplona.quartz.nip19Bech32.entities.NPub
 import com.vitorpamplona.quartz.nip19Bech32.entities.NSec
 import com.vitorpamplona.quartz.nip19Bech32.toNpub
+import com.example.views.data.UserRelay
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.crypto.KeyPair
 import com.vitorpamplona.quartz.nip01Core.signers.NostrSignerInternal
@@ -71,6 +73,22 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
 
     /** Exposes the Amber signer state so composables can register foreground launchers. */
     val amberState: StateFlow<AmberState> = amberSignerManager.state
+
+    /**
+     * Set the Activity context for Amber signing. Call from MainActivity.onResume() so that
+     * the external signer (NIP-55) can use the Activity for the ContentProvider/signing flow
+     * after app restart or return from background.
+     */
+    fun setAmberActivityContext(activity: Activity) {
+        amberSignerManager.setActivityContext(activity)
+    }
+
+    /**
+     * Clear the Activity context when the activity is destroyed. Call from MainActivity.onDestroy().
+     */
+    fun clearAmberActivityContext() {
+        amberSignerManager.clearActivityContext()
+    }
 
     /** True after loadSavedAccounts() and restore/setGuestMode have run. Use to avoid showing sign-in during init. */
     private val _accountsRestored = MutableStateFlow(false)
@@ -529,7 +547,7 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
             id = note.id,
             pubKey = targetPubkey,
             createdAt = (note.timestamp / 1000),
-            kind = 1,
+            kind = note.kind,
             tags = emptyArray(),
             content = note.content,
             sig = ""
@@ -563,6 +581,47 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
             } catch (e: Exception) {
                 Log.e("AccountStateViewModel", "sendReaction failed: ${e.message}", e)
                 _toastMessage.value = "Reaction failed: ${e.message?.take(60)}"
+            }
+        }
+        return null
+    }
+
+    /**
+     * Outbox relays for the current account (for relay picker when publishing kind-1).
+     * Returns empty list if no account or no outbox configured.
+     */
+    fun getOutboxRelaysForPublish(): List<UserRelay> {
+        val account = _currentAccount.value ?: return emptyList()
+        val accountHex = account.toHexKey() ?: return emptyList()
+        return relayStorageManager.loadOutboxRelays(accountHex)
+    }
+
+    /**
+     * Publish a Kind 1 text note. Signs with Amber and sends to the given relay URLs.
+     * Returns null on success, or an error message for synchronous failures.
+     * Async failures are emitted via [toastMessage].
+     */
+    fun publishKind1(content: String, relayUrls: Set<String>): String? {
+        if (content.isBlank()) return "Note is empty"
+        val account = _currentAccount.value ?: return "Sign in to publish"
+        val amber = amberSignerManager.state.value
+        val signer = (amber as? AmberState.LoggedIn)?.signer ?: return "Amber signer not available"
+        val normalized = relayUrls.mapNotNull { RelayUrlNormalizer.normalizeOrNull(it) }.toSet()
+        if (normalized.isEmpty()) return "No valid relays selected"
+        viewModelScope.launch {
+            try {
+                val template = Event.build(1, content)
+                val signed = signer.sign(template)
+                if (signed.sig.isBlank()) {
+                    _toastMessage.value = "Note signing failed"
+                    return@launch
+                }
+                RelayConnectionStateMachine.getInstance().nostrClient.send(signed, normalized)
+                Log.d("AccountStateViewModel", "Kind-1 published: ${signed.id.take(8)}")
+                _toastMessage.value = "Note published"
+            } catch (e: Exception) {
+                Log.e("AccountStateViewModel", "publishKind1 failed: ${e.message}", e)
+                _toastMessage.value = "Publish failed: ${e.message?.take(60)}"
             }
         }
         return null

@@ -12,7 +12,7 @@ import com.example.views.utils.UrlDetector
 import com.example.views.utils.extractPubkeysFromContent
 import com.example.views.utils.normalizeAuthorIdForCache
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
-import com.example.views.ribbit.tsm.BuildConfig
+import com.example.views.ribbit.BuildConfig
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.relay.normalizer.RelayUrlNormalizer
 import kotlinx.coroutines.CoroutineScope

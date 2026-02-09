@@ -222,8 +222,8 @@ class ThreadRepliesRepository {
             rootNoteId = rootId,
             replyToId = replyToId,
             threadLevel = threadLevel,
-            // Per-event relay source not yet available from temporary subscription; leave empty so we don't show misleading "all relays" orbs
-            relayUrls = emptyList()
+            relayUrls = emptyList(),
+            kind = event.kind
         )
     }
 

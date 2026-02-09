@@ -18,6 +18,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.views.repository.NotesRepository
 import com.example.views.repository.ProfileMetadataCache
@@ -26,7 +27,7 @@ import com.example.views.relay.RelayConnectionStateMachine
 import com.example.views.services.RelayForegroundService
 import com.example.views.ui.navigation.RibbitNavigation
 import com.example.views.ui.theme.ViewsTheme
-import com.example.views.ribbit.tsm.BuildConfig
+import com.example.views.ribbit.BuildConfig
 import com.example.views.utils.AppMemoryTrimmer
 import com.example.views.viewmodel.AppViewModel
 import com.example.views.viewmodel.AccountStateViewModel
@@ -71,6 +72,7 @@ class MainActivity : ComponentActivity(), ComponentCallbacks2 {
     // Callback to handle login result
     private var onAmberLoginResult: ((Int, Intent?) -> Unit)? = null
     private var shouldRunRelayService = false
+    private lateinit var accountStateViewModel: AccountStateViewModel
     private var pendingStartAfterPermission = false
     private var isInForeground = false
 
@@ -129,6 +131,8 @@ class MainActivity : ComponentActivity(), ComponentCallbacks2 {
             }
         })
 
+        accountStateViewModel = ViewModelProvider(this)[AccountStateViewModel::class.java]
+
         setContent {
             ViewsTheme {
                 Surface(
@@ -136,7 +140,6 @@ class MainActivity : ComponentActivity(), ComponentCallbacks2 {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     val appViewModel: AppViewModel = viewModel()
-                    val accountStateViewModel: AccountStateViewModel = viewModel()
                     val currentAccount by accountStateViewModel.currentAccount.collectAsState()
 
                     // Set up login result handler
@@ -163,6 +166,9 @@ class MainActivity : ComponentActivity(), ComponentCallbacks2 {
     override fun onResume() {
         super.onResume()
         isInForeground = true
+        if (::accountStateViewModel.isInitialized) {
+            accountStateViewModel.setAmberActivityContext(this)
+        }
         if (shouldRunRelayService) {
             maybeStartRelayForegroundService()
         }
@@ -174,6 +180,9 @@ class MainActivity : ComponentActivity(), ComponentCallbacks2 {
     }
 
     override fun onDestroy() {
+        if (::accountStateViewModel.isInitialized) {
+            accountStateViewModel.clearAmberActivityContext()
+        }
         super.onDestroy()
         unregisterComponentCallbacks(this)
     }

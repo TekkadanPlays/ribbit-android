@@ -29,7 +29,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.views.ribbit.tsm.R
+import com.example.views.ribbit.R
 import com.example.views.data.Author
 import com.example.views.data.Note
 import com.example.views.data.SampleData

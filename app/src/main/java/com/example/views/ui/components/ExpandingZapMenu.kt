@@ -96,6 +96,7 @@ fun ExpandingZapMenu(
                 // Zap amounts - sorted largest to smallest
                 items(zapAmounts.sortedDescending()) { amount ->
                     FilterChip(
+                        modifier = Modifier.padding(horizontal = 4.dp),
                         selected = amount == 1L, // Highlight 1 sat
                         onClick = {
                             onExpandedChange(false)
@@ -132,6 +133,7 @@ fun ExpandingZapMenu(
                 // Edit chip - rightmost position
                 item {
                     FilterChip(
+                        modifier = Modifier.padding(horizontal = 4.dp),
                         selected = false,
                         onClick = {
                             onExpandedChange(false)

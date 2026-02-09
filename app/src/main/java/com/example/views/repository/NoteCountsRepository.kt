@@ -20,19 +20,41 @@ object NoteCountsRepository {
     private val _countsByNoteId = MutableStateFlow<Map<String, NoteCounts>>(emptyMap())
     val countsByNoteId: StateFlow<Map<String, NoteCounts>> = _countsByNoteId.asStateFlow()
 
-    /** Last set of note IDs we requested for subscription; used to avoid re-subscribing on every tick. */
+    /** Feed note IDs (from NotesRepository). */
     @Volatile
-    private var lastNoteIdsOfInterest: Set<String> = emptySet()
+    private var feedNoteIds: Set<String> = emptySet()
+
+    /** Thread reply note IDs (from thread view when visible). Merged with feed for counts subscription. */
+    @Volatile
+    private var threadNoteIds: Set<String> = emptySet()
+
+    @Volatile
+    private var lastMergedNoteIds: Set<String> = emptySet()
 
     /**
-     * Set note IDs to subscribe for kind-7 and kind-9735. Pass empty to stop counts subscription.
-     * Call from feed layer (e.g. NotesRepository) when displayed note IDs change (debounced).
+     * Set note IDs from the feed to subscribe for kind-7 and kind-9735.
+     * Call from NotesRepository when displayed note IDs change (debounced).
      */
     fun setNoteIdsOfInterest(noteIds: Set<String>) {
-        if (noteIds == lastNoteIdsOfInterest) return
-        lastNoteIdsOfInterest = noteIds
+        feedNoteIds = noteIds
+        updateMergedSubscription()
+    }
+
+    /**
+     * Set note IDs from the current thread view (replies). Merged with feed IDs so kind-1111 replies
+     * get reaction/zap counts. Call with empty set when leaving thread view.
+     */
+    fun setThreadNoteIdsOfInterest(noteIds: Set<String>) {
+        threadNoteIds = noteIds
+        updateMergedSubscription()
+    }
+
+    private fun updateMergedSubscription() {
+        val merged = feedNoteIds + threadNoteIds
+        if (merged == lastMergedNoteIds) return
+        lastMergedNoteIds = merged
         com.example.views.relay.RelayConnectionStateMachine.getInstance()
-            .requestFeedChangeWithCounts(noteIds)
+            .requestFeedChangeWithCounts(merged)
     }
 
     /**

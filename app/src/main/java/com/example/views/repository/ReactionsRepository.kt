@@ -1,7 +1,7 @@
 package com.example.views.repository
 
 import android.content.Context
-import com.example.views.ribbit.tsm.BuildConfig
+import com.example.views.ribbit.BuildConfig
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json

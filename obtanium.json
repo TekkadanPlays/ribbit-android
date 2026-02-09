@@ -19,6 +19,28 @@
   "banner": "https://raw.githubusercontent.com/TekkadanPlays/ribbit-android/main/banner.png",
   "releases": [
     {
+      "version": "0.1.1",
+      "versionCode": 5,
+      "releaseDate": "2026-02-08",
+      "downloadUrl": "https://github.com/TekkadanPlays/ribbit-android/releases/download/v0.1.1/ribbit-v0.1.1.apk",
+      "changelog": "Amber lifecycle fix, zap error feedback, relay picker, NIP-25 kind-1111, zap spacing, app ID ribbit.",
+      "minSdk": 35,
+      "targetSdk": 36,
+      "packageId": "com.example.views.ribbit",
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ],
+      "features": [
+        "Amber signer persists after restart",
+        "Zap errors on home feed",
+        "Relay selection for kind-1",
+        "NIP-25 on kind-1111",
+        "Zap chip spacing",
+        "App ID ribbit"
+      ]
+    },
+    {
       "version": "0.1.0",
       "versionCode": 4,
       "releaseDate": "2026-02-08",
@@ -26,7 +48,7 @@
       "changelog": "Thread UI polish (spacing, alignment). Notifications for topic replies (kind-1111) and thread replies (kind-1) with separate filters; open thread/topic with correct reply kind.",
       "minSdk": 35,
       "targetSdk": 36,
-      "packageId": "com.example.views.ribbit.tsm",
+      "packageId": "com.example.views.ribbit",
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"
@@ -46,7 +68,7 @@
       "changelog": "Clean v0.0.3 release with Lightning Zaps and Wallet Connect functionality. Connect your Lightning wallet to send zaps to posts and comments.",
       "minSdk": 35,
       "targetSdk": 36,
-      "packageId": "com.example.views.ribbit.tsm",
+      "packageId": "com.example.views.ribbit",
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE"

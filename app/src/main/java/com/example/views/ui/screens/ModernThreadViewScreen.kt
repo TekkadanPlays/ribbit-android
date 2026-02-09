@@ -239,6 +239,19 @@ fun ModernThreadViewScreen(
         }
     }
 
+    // Subscribe to kind-7/9735 counts for root + reply note IDs so reactions/zaps show on thread replies
+    val threadNoteIds = remember(repliesState.replies, note.id) {
+        (repliesState.replies.map { it.id } + note.id).toSet()
+    }
+    LaunchedEffect(threadNoteIds) {
+        com.example.views.repository.NoteCountsRepository.setThreadNoteIdsOfInterest(threadNoteIds)
+    }
+    DisposableEffect(Unit) {
+        onDispose { com.example.views.repository.NoteCountsRepository.setThreadNoteIdsOfInterest(emptySet()) }
+    }
+
+    val noteCountsByNoteId by com.example.views.repository.NoteCountsRepository.countsByNoteId.collectAsState()
+
     // ✅ ZAP MENU AWARENESS: Global state for zap menu closure (like feed cards)
     var shouldCloseZapMenus by remember { mutableStateOf(false) }
     var expandedZapMenuCommentId by remember { mutableStateOf<String?>(null) }
@@ -401,6 +414,8 @@ fun ModernThreadViewScreen(
                                 isZapInProgress = note.id in zapInProgressNoteIds,
                         isZapped = note.id in zappedNoteIds,
                         myZappedAmount = myZappedAmountByNoteId[note.id],
+                        overrideZapCount = noteCountsByNoteId[note.id]?.zapCount,
+                        overrideReactions = noteCountsByNoteId[note.id]?.reactions,
                         onRelayClick = { relayUrlToShowInfo = it },
                         shouldCloseZapMenus = shouldCloseZapMenus,
                         accountNpub = accountNpub,
@@ -551,6 +566,8 @@ fun ModernThreadViewScreen(
                                 isZapInProgress = reply.toNote().id in zapInProgressNoteIds,
                                 isZapped = reply.toNote().id in zappedNoteIds,
                                 myZappedAmount = myZappedAmountByNoteId[reply.toNote().id],
+                                overrideZapCount = noteCountsByNoteId[reply.id]?.zapCount,
+                                overrideReactions = noteCountsByNoteId[reply.id]?.reactions,
                                 onRelayClick = { relayUrlToShowInfo = it },
                                 shouldCloseZapMenus = shouldCloseZapMenus,
                                 accountNpub = accountNpub,

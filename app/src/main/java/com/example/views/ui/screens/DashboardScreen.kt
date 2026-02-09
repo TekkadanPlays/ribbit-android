@@ -807,10 +807,12 @@ fun DashboardScreen(
                             onVideoClick = onVideoClick,
                             onZap = { noteId, amount ->
                                 val n = sortedNotes.find { it.id == noteId } ?: return@NoteCard
-                                accountStateViewModel.sendZap(n, amount, com.example.views.repository.ZapType.PUBLIC, "")
+                                val err = accountStateViewModel.sendZap(n, amount, com.example.views.repository.ZapType.PUBLIC, "")
+                                if (err != null) Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                             },
                             onCustomZapSend = { n, amount, zapType, msg ->
-                                accountStateViewModel.sendZap(n, amount, zapType, msg)
+                                val err = accountStateViewModel.sendZap(n, amount, zapType, msg)
+                                if (err != null) Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
                             },
                             onZapSettings = { showZapConfigDialog = true },
                             shouldCloseZapMenus = shouldCloseZapMenus,
