@@ -133,6 +133,9 @@ class MainActivity : ComponentActivity(), ComponentCallbacks2 {
 
         accountStateViewModel = ViewModelProvider(this)[AccountStateViewModel::class.java]
 
+        // Initialize theme preferences (SharedPreferences-backed, must happen before setContent)
+        com.example.views.ui.theme.ThemePreferences.init(applicationContext)
+
         setContent {
             ViewsTheme {
                 Surface(

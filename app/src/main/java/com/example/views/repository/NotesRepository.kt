@@ -78,6 +78,10 @@ class NotesRepository private constructor() {
 
     private var cacheRelayUrls = listOf<String>()
 
+    /** Current user's hex pubkey (lowercase) for immediate own-event display. */
+    @Volatile
+    private var currentUserPubkey: String? = null
+
     init {
         if (BuildConfig.DEBUG) {
             Log.i("RibbitEvent", "Monitor enabled: kind-1 events will be logged here. Run: adb logcat -s RibbitEvent")
@@ -108,6 +112,14 @@ class NotesRepository private constructor() {
                 }
             }
         }
+    }
+
+    /**
+     * Set the current user's public key. Used to identify own events for immediate display.
+     */
+    fun setCurrentUserPubkey(pubkey: String?) {
+        currentUserPubkey = pubkey?.lowercase()
+        Log.d(TAG, "Set current user pubkey: ${pubkey?.take(8)}...")
     }
 
     /**
@@ -164,6 +176,9 @@ class NotesRepository private constructor() {
     private var feedCutoffTimestampMs: Long = 0L
     private var latestNoteTimestampAtOpen: Long = 0L
     private var initialLoadComplete: Boolean = false
+    /** Timestamp when the first note was auto-displayed; notes keep auto-applying for a grace period after this. */
+    private var firstNoteDisplayedAtMs: Long = 0L
+    private val INITIAL_FEED_GRACE_MS = 5_000L
     private val _pendingNewNotes = mutableListOf<Note>()
     private val pendingNotesLock = Any()
     private val _newNotesCounts = MutableStateFlow(NewNotesCounts(0, 0))
@@ -387,18 +402,18 @@ class NotesRepository private constructor() {
     /** Pending new notes counts for All and Following (by current relay set); separate so both filters show correct counts. */
     private fun updateDisplayedNewNotesCount() {
         try {
-            if (connectedRelays.isEmpty()) {
-                _newNotesCounts.value = NewNotesCounts(0, 0, System.currentTimeMillis())
-                return
-            }
             val connectedSet = connectedRelays.toSet()
+            val hasRelayFilter = connectedSet.isNotEmpty()
             val filter = followFilter
             var countAll = 0
             var countFollowing = 0
             val pendingSnapshot = synchronized(pendingNotesLock) { _pendingNewNotes.toList() }
             val relayMatch: (Note) -> Boolean = { note ->
-                val urls = note.relayUrls.ifEmpty { listOfNotNull(note.relayUrl) }
-                urls.isEmpty() || urls.any { url -> url in connectedSet || RelayUrlNormalizer.normalizeOrNull(url)?.url in connectedSet }
+                if (!hasRelayFilter) true
+                else {
+                    val urls = note.relayUrls.ifEmpty { listOfNotNull(note.relayUrl) }
+                    urls.isEmpty() || urls.any { url -> url in connectedSet || RelayUrlNormalizer.normalizeOrNull(url)?.url in connectedSet }
+                }
             }
             for (note in pendingSnapshot) {
                 val relayOk = relayMatch(note)
@@ -435,6 +450,7 @@ class NotesRepository private constructor() {
         feedCutoffTimestampMs = 0L
         latestNoteTimestampAtOpen = 0L
         initialLoadComplete = false
+        firstNoteDisplayedAtMs = 0L
     }
 
     /**
@@ -477,6 +493,7 @@ class NotesRepository private constructor() {
         synchronized(pendingNotesLock) { _pendingNewNotes.clear() }
         _newNotesCounts.value = NewNotesCounts(0, 0, System.currentTimeMillis())
         initialLoadComplete = false
+        firstNoteDisplayedAtMs = 0L
 
         // Cutoff set exactly when we start the subscription: only notes older than this moment are shown in the feed
         feedCutoffTimestampMs = System.currentTimeMillis()
@@ -511,6 +528,7 @@ class NotesRepository private constructor() {
         synchronized(pendingNotesLock) { _pendingNewNotes.clear() }
         _newNotesCounts.value = NewNotesCounts(0, 0, System.currentTimeMillis())
         initialLoadComplete = false
+        firstNoteDisplayedAtMs = 0L
         feedCutoffTimestampMs = System.currentTimeMillis()
         latestNoteTimestampAtOpen = feedCutoffTimestampMs
 
@@ -544,6 +562,7 @@ class NotesRepository private constructor() {
         synchronized(pendingNotesLock) { _pendingNewNotes.clear() }
         _newNotesCounts.value = NewNotesCounts(0, 0, System.currentTimeMillis())
         initialLoadComplete = false
+        firstNoteDisplayedAtMs = 0L
         feedCutoffTimestampMs = System.currentTimeMillis()
         latestNoteTimestampAtOpen = feedCutoffTimestampMs
 
@@ -683,22 +702,29 @@ class NotesRepository private constructor() {
                         }
                     }
                 } else {
-                    // After initial load: only count as "new" (pending) if note is actually newer than the top of the feed.
-                    val topTimestamp = currentNotes.maxOfOrNull { it.timestamp } ?: latestNoteTimestampAtOpen
-                    if (note.timestamp <= topTimestamp) {
-                        // Late-arriving old note: merge into feed in sorted order (expand history, no "new" count).
-                        val merged = trimNotesToCap((currentNotes + note).distinctBy { it.id }.sortedByDescending { it.timestamp })
-                        _notes.value = merged
+                    // ✅ IMMEDIATE DISPLAY: Check if this is user's own published event - show immediately
+                    val isOwnEvent = note.author.id.lowercase() == currentUserPubkey
+                    // Auto-display while feed is still populating (empty or within grace period after first note)
+                    val now = System.currentTimeMillis()
+                    val withinGracePeriod = firstNoteDisplayedAtMs == 0L ||
+                        (now - firstNoteDisplayedAtMs) < INITIAL_FEED_GRACE_MS
+                    if (isOwnEvent || withinGracePeriod) {
+                        val newNotes = trimNotesToCap((currentNotes + note).sortedByDescending { it.timestamp })
+                        _notes.value = newNotes
                         updateDisplayedNotes()
-                        if (merged.size % 50 == 0) {
-                            Log.d(TAG, "Merged late-arriving (total so far: ${merged.size})")
+                        if (firstNoteDisplayedAtMs == 0L && _displayedNotes.value.isNotEmpty()) {
+                            firstNoteDisplayedAtMs = now
+                        }
+                        if (isOwnEvent) {
+                            Log.d(TAG, "📤 Own event displayed immediately: ${note.id.take(8)}")
                         }
                     } else {
+                        // Event from others - use pending logic
                         synchronized(pendingNotesLock) { _pendingNewNotes.add(note) }
                         updateDisplayedNewNotesCount()
-                        val c = _newNotesCounts.value
                         val pendingSize = synchronized(pendingNotesLock) { _pendingNewNotes.size }
                         if (pendingSize % 10 == 0) {
+                            val c = _newNotesCounts.value
                             Log.d(TAG, "Pending new notes: $pendingSize total (all=${c.all} following=${c.following})")
                         }
                     }
@@ -783,6 +809,7 @@ class NotesRepository private constructor() {
         feedCutoffTimestampMs = 0L
         latestNoteTimestampAtOpen = 0L
         initialLoadComplete = false
+        firstNoteDisplayedAtMs = 0L
         _feedSessionState.value = FeedSessionState.Idle
     }
 

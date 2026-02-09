@@ -196,179 +196,228 @@ private fun ProfileHeader(
     onMessageClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val uriHandler = LocalUriHandler.current
+
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 2.dp
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Profile Picture: avatar from kind-0 when available, else initial
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Banner image (kind-0)
             Box(
                 modifier = Modifier
-                    .size(120.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .height(140.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
-                if (author.avatarUrl != null) {
+                author.banner?.takeIf { it.isNotBlank() }?.let { bannerUrl ->
                     AsyncImage(
-                        model = author.avatarUrl,
-                        contentDescription = "Profile picture",
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(CircleShape),
+                        model = bannerUrl,
+                        contentDescription = "Profile banner",
+                        modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
-                } else {
-                    Text(
-                        text = author.displayName.take(1).uppercase(),
-                        style = MaterialTheme.typography.displayMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Name and verification
-            Row(
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    text = author.displayName,
-                    style = MaterialTheme.typography.headlineSmall.copy(
-                        fontWeight = FontWeight.Bold
-                    ),
-                    textAlign = TextAlign.Center
-                )
-                if (author.isVerified) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Icon(
-                        imageVector = Icons.Default.Star,
-                        contentDescription = "Verified",
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Username
-            Text(
-                text = "@${author.username}",
-                style = MaterialTheme.typography.bodyLarge.copy(
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                ),
-                textAlign = TextAlign.Center
-            )
-
-            // About / bio (kind-0)
-            author.about?.takeIf { it.isNotBlank() }?.let { about ->
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = about,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        color = MaterialTheme.colorScheme.onSurface
-                    ),
-                    textAlign = TextAlign.Center,
-                    maxLines = 6,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-
-            // Website link (kind-0)
-            author.website?.takeIf { it.isNotBlank() }?.let { url ->
-                Spacer(modifier = Modifier.height(8.dp))
-                val uriHandler = LocalUriHandler.current
-                val displayUrl = url.take(64) + if (url.length > 64) "…" else ""
-                Text(
-                    text = displayUrl,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        color = MaterialTheme.colorScheme.primary,
-                        textDecoration = TextDecoration.Underline
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                // Avatar overlapping the banner
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { uriHandler.openUri(if (url.startsWith("http")) url else "https://$url") }
-                )
-            }
-
-            // NIP-05 identifier (kind-0)
-            author.nip05?.takeIf { it.isNotBlank() }?.let { nip05 ->
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = nip05,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    ),
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Stats Row (Notes = loaded count; Followers/Following = placeholder until kind-3 aggregation)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                StatItem(
-                    label = "Notes",
-                    value = notesCount.toString(),
-                    onClick = { /* Scroll to notes list */ }
-                )
-                StatItem(
-                    label = "Followers",
-                    value = "\u2013",
-                    onClick = { /* TODO: Requires kind-3 index */ }
-                )
-                StatItem(
-                    label = "Following",
-                    value = "\u2013",
-                    onClick = { /* TODO: Requires kind-3 index */ }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Action Buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                if (isFollowing) {
-                    OutlinedButton(
-                        onClick = onFollowClick,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Following")
-                    }
-                } else {
-                    Button(
-                        onClick = onFollowClick,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Follow")
+                        .offset(y = (-40).dp)
+                        .size(96.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(3.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (author.avatarUrl != null) {
+                        AsyncImage(
+                            model = author.avatarUrl,
+                            contentDescription = "Profile picture",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Text(
+                            text = author.displayName.take(1).uppercase(),
+                            style = MaterialTheme.typography.displaySmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        )
                     }
                 }
-                OutlinedButton(
-                    onClick = onMessageClick,
-                    modifier = Modifier.weight(1f)
+
+                // Pull content up to compensate for avatar offset
+                Column(
+                    modifier = Modifier.offset(y = (-24).dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Message")
+                    // Name, pronouns, and verification
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = author.displayName,
+                            style = MaterialTheme.typography.headlineSmall.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            textAlign = TextAlign.Center
+                        )
+                        author.pronouns?.takeIf { it.isNotBlank() }?.let { pronouns ->
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "($pronouns)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (author.isVerified) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = "Verified",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Username
+                    Text(
+                        text = "@${author.username}",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+
+                    // NIP-05 identifier
+                    author.nip05?.takeIf { it.isNotBlank() }?.let { nip05 ->
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = nip05,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // About / bio
+                    author.about?.takeIf { it.isNotBlank() }?.let { about ->
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = about,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            textAlign = TextAlign.Center,
+                            maxLines = 6,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    // Website link
+                    author.website?.takeIf { it.isNotBlank() }?.let { url ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable {
+                                uriHandler.openUri(if (url.startsWith("http")) url else "https://$url")
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Link,
+                                contentDescription = "Website",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = url.removePrefix("https://").removePrefix("http://"),
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    // Lightning address (LUD-16)
+                    author.lud16?.takeIf { it.isNotBlank() }?.let { lnAddress ->
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable { /* TODO: open zap dialog */ }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ElectricBolt,
+                                contentDescription = "Lightning address",
+                                modifier = Modifier.size(16.dp),
+                                tint = Color(0xFFFFB74D) // Bitcoin orange
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = lnAddress,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Stats Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        StatItem(label = "Notes", value = notesCount.toString(), onClick = {})
+                        StatItem(label = "Followers", value = "\u2013", onClick = {})
+                        StatItem(label = "Following", value = "\u2013", onClick = {})
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Action Buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        if (isFollowing) {
+                            OutlinedButton(
+                                onClick = onFollowClick,
+                                modifier = Modifier.weight(1f)
+                            ) { Text("Following") }
+                        } else {
+                            Button(
+                                onClick = onFollowClick,
+                                modifier = Modifier.weight(1f)
+                            ) { Text("Follow") }
+                        }
+                        OutlinedButton(
+                            onClick = onMessageClick,
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Message") }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
             }
         }

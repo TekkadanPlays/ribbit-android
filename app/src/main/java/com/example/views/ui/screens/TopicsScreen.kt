@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -637,85 +638,30 @@ fun TopicsScreen(
                     // Main content area
                     Box(modifier = Modifier.fillMaxSize()) {
                         if (!isViewingHashtagFeed) {
-                            // Hashtag list - connection status, new topics, then full width cards
+                            // Hashtag list - new topics counter, then full width cards
                             LazyColumn(
                                 state = listState,
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(vertical = 8.dp)
+                                contentPadding = PaddingValues(0.dp)
                             ) {
-                                // Connection status (same pattern as DashboardScreen)
-                                item(key = "topics_connection_status") {
-                                    val relayState = topicsUiState.relayState
-                                    val connectionText = when (relayState) {
-                                        is RelayState.Disconnected -> "Disconnected"
-                                        is RelayState.Connecting -> "Connecting…"
-                                        is RelayState.Connected -> "Connected"
-                                        is RelayState.Subscribed -> "Connected"
-                                        is RelayState.ConnectFailed -> "Connection failed" + (relayState.message?.let { ": $it" } ?: "")
-                                    }
-                                    val isConnecting = relayState is RelayState.Connecting
-                                    val isFailed = relayState is RelayState.ConnectFailed
-                                    val stateMachine = RelayConnectionStateMachine.getInstance()
-                                    Surface(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        color = when (relayState) {
-                                            is RelayState.Disconnected -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
-                                            is RelayState.Connecting -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                                            is RelayState.ConnectFailed -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
-                                            else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                                        }
-                                    ) {
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                if (isConnecting) {
-                                                    CircularProgressIndicator(
-                                                        modifier = Modifier.size(16.dp),
-                                                        strokeWidth = 2.dp
-                                                    )
-                                                    Spacer(Modifier.width(8.dp))
-                                                }
-                                                Text(
-                                                    text = buildString {
-                                                        append(connectionText)
-                                                        topicsUiState.relayCountSummary?.let { append(" · $it") }
-                                                    },
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                            if (isFailed) {
-                                                TextButton(onClick = { stateMachine.requestRetry() }) {
-                                                    Text("Retry", style = MaterialTheme.typography.labelMedium)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                // "x new topics" row (topics-only indicator)
+                                // "x new topics" counter (tap to refresh) — connection status lives in sidebar
                                 if (topicsUiState.newTopicsCount > 0) {
                                     item(key = "new_topics_header") {
                                         Surface(
                                             modifier = Modifier.fillMaxWidth(),
-                                            color = MaterialTheme.colorScheme.surfaceVariant,
-                                            shadowElevation = 2.dp
+                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
                                         ) {
                                             Row(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
                                                     .clickable { topicsViewModel.refreshTopics() }
-                                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                                    .padding(horizontal = 16.dp, vertical = 10.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Text(
                                                     text = "${topicsUiState.newTopicsCount} new topic${if (topicsUiState.newTopicsCount == 1) "" else "s"}",
                                                     style = MaterialTheme.typography.bodyMedium,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    color = MaterialTheme.colorScheme.primary
                                                 )
                                                 Spacer(Modifier.width(8.dp))
                                                 Text(
@@ -807,7 +753,7 @@ fun TopicsScreen(
                                 LazyColumn(
                                     state = listState,
                                     modifier = Modifier.fillMaxSize(),
-                                    contentPadding = PaddingValues(vertical = 8.dp)
+                                    contentPadding = PaddingValues(0.dp)
                                 ) {
                                     items(
                                         items = topicsUiState.topicsForSelectedHashtag,
@@ -1028,8 +974,7 @@ private fun Kind11TopicCard(
     Card(
         onClick = onClick,
         modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 0.dp, vertical = 4.dp),
+            .fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
@@ -1041,19 +986,20 @@ private fun Kind11TopicCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            // Header: Author + Time + Actions
+            // Header: Profile pic + Author + Time + Relay orbs
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
+                com.example.views.ui.components.ProfilePicture(
+                    author = topic.author,
+                    size = 36.dp,
+                    onClick = { /* profile click */ }
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = topic.author.displayName,
                         style = MaterialTheme.typography.bodyMedium,
@@ -1062,52 +1008,42 @@ private fun Kind11TopicCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        text = "•",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                    Text(
-                        text = formatHashtagTimestamp(topic.timestamp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = formatHashtagTimestamp(topic.timestamp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        if (topic.replyCount > 0) {
+                            Text(
+                                text = "\u2022",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                            Text(
+                                text = "${topic.replyCount} ${if (topic.replyCount == 1) "reply" else "replies"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
                 }
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = onToggleFavorite,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isFavorited) Icons.Default.Star else Icons.Default.StarBorder,
-                            contentDescription = if (isFavorited) "Unfavorite" else "Favorite",
-                            tint = if (isFavorited) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    IconButton(
-                        onClick = onMenuClick,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "More options",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                // Relay orbs
+                val displayRelayUrls = topic.relayUrls.ifEmpty { listOfNotNull(topic.relayUrl).filter { it.isNotEmpty() } }.distinct().take(4)
+                if (displayRelayUrls.isNotEmpty()) {
+                    com.example.views.ui.components.RelayOrbs(
+                        relayUrls = displayRelayUrls,
+                        onRelayClick = { /* relay info */ }
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
             // Title
             if (topic.title.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(10.dp))
                 Text(
                     text = topic.title,
                     style = MaterialTheme.typography.titleMedium,
@@ -1116,77 +1052,38 @@ private fun Kind11TopicCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(8.dp))
             }
 
-            // Karma count + Reply count
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // TODO: Calculate actual karma (upvotes - downvotes)
-                val karma = 169 // Placeholder
-                Text(
-                    text = karma.toString(),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "•",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-                Text(
-                    text = "${topic.replyCount} ${if (topic.replyCount == 1) "Reply" else "Replies"}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Body text with light background
+            // Body text with subtle background
             if (topic.content.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                    shape = RoundedCornerShape(8.dp)
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
                         text = topic.content,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
                         modifier = Modifier.padding(12.dp),
                         maxLines = 4,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        lineHeight = 20.sp
                     )
                 }
             }
 
-            // Hashtags
+            // Hashtags — inline text style, not chips
             if (topic.hashtags.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    topic.hashtags.take(3).forEach { hashtag ->
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.height(24.dp)
-                        ) {
-                            Text(
-                                text = "#$hashtag",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = topic.hashtags.take(4).joinToString("  ") { "#$it" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF8FBC8F)
+                )
             }
+
         }
 
         // Divider
@@ -1205,7 +1102,7 @@ private fun com.example.views.repository.TopicNote.toNote(): Note {
     return Note(
         id = id,
         author = author,
-        content = if (title.isNotEmpty()) "$title\n\n$content" else content,
+        content = content,
         timestamp = timestamp,
         likes = 0,
         shares = 0,
@@ -1216,7 +1113,7 @@ private fun com.example.views.repository.TopicNote.toNote(): Note {
         kind = 11,
         topicTitle = title.ifEmpty { null },
         relayUrl = relayUrl.ifEmpty { null },
-        relayUrls = listOfNotNull(relayUrl).filter { it.isNotEmpty() }
+        relayUrls = relayUrls.ifEmpty { listOfNotNull(relayUrl).filter { it.isNotEmpty() } }
     )
 }
 

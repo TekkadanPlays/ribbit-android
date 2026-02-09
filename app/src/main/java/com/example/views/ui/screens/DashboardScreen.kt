@@ -7,6 +7,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -84,6 +85,10 @@ fun DashboardScreen(
     onOpenImageViewer: (List<String>, Int) -> Unit = { _, _ -> },
     onVideoClick: (List<String>, Int) -> Unit = { _, _ -> },
     onScrollToTop: () -> Unit = {},
+    /** Retrieve the shared media album page for a note (from AppViewModel). */
+    mediaPageForNote: (String) -> Int = { 0 },
+    /** Store the media album page when user swipes (to AppViewModel). */
+    onMediaPageChanged: (String, Int) -> Unit = { _, _ -> },
     listState: LazyListState = rememberLazyListState(),
     viewModel: DashboardViewModel = viewModel(),
     feedStateViewModel: FeedStateViewModel = viewModel(),
@@ -134,16 +139,34 @@ fun DashboardScreen(
     // Track if we've already loaded relays on this mount
     var hasLoadedRelays by remember { mutableStateOf(false) }
 
+    // If the selected relay/category was removed, fall back to Global
+    LaunchedEffect(relayCategories, homeFeedState) {
+        val allRelayUrls = relayCategories.flatMap { it.relays }.map { it.url }.toSet()
+        val selectedUrl = homeFeedState.selectedRelayUrl
+        val selectedCatId = homeFeedState.selectedCategoryId
+        if (selectedUrl != null && selectedUrl !in allRelayUrls) {
+            feedStateViewModel.setHomeGlobal()
+            feedStateViewModel.setTopicsGlobal()
+            val allUrls = allRelayUrls.toList()
+            if (allUrls.isNotEmpty()) viewModel.setDisplayFilterOnly(allUrls)
+        } else if (selectedCatId != null && relayCategories.none { it.id == selectedCatId }) {
+            feedStateViewModel.setHomeGlobal()
+            feedStateViewModel.setTopicsGlobal()
+            val allUrls = allRelayUrls.toList()
+            if (allUrls.isNotEmpty()) viewModel.setDisplayFilterOnly(allUrls)
+        }
+    }
+
     // When dashboard is visible, apply feed subscription. Key by selection only so expand/collapse does not reload.
     // When categories have no relays (e.g. fresh install or default category empty), fall back to cache + outbox so feed still loads.
+    // Subscription setup: only re-run when visibility, account, or relay config changes.
+    // Sidebar relay/category selection is handled by setDisplayFilterOnly in onItemClick — NOT here.
     LaunchedEffect(
         isDashboardVisible,
         currentAccount,
         relayCategories,
         relayUiState.outboxRelays,
-        homeFeedState.isGlobal,
-        homeFeedState.selectedCategoryId,
-        homeFeedState.selectedRelayUrl
+        homeFeedState.isGlobal
     ) {
         if (!isDashboardVisible || relayCategories.isEmpty()) return@LaunchedEffect
         val allUserRelayUrls = relayCategories.flatMap { it.relays }.map { it.url }.distinct()
@@ -194,7 +217,7 @@ fun DashboardScreen(
         }
     }
 
-    // Set cache relay URLs, request kind-0 for current user, and load follow list (kind-3 from cache + outbox, Amethyst-style)
+    // Set cache relay URLs, request kind-0 for current user, load follow list, and fetch NIP-65 relay list
     LaunchedEffect(currentAccount, relayUiState.outboxRelays) {
         currentAccount?.toHexKey()?.let { pubkey ->
             val cacheUrls = storageManager.loadCacheRelays(pubkey).map { it.url }
@@ -205,6 +228,8 @@ fun DashboardScreen(
                 com.example.views.repository.ProfileMetadataCache.getInstance()
                     .requestProfiles(listOf(pubkey), cacheUrls)
                 viewModel.loadFollowList(pubkey, followRelayUrls)
+                // NIP-65: fetch kind-10002 relay list for outbox model (counts use indexer relays)
+                com.example.views.repository.Nip65RelayListRepository.fetchRelayList(pubkey, cacheUrls)
             }
         }
     }
@@ -329,6 +354,8 @@ fun DashboardScreen(
         relayCategories = relayCategories,
         feedState = homeFeedState,
         selectedDisplayName = feedStateViewModel.getHomeDisplayName(),
+        relayState = uiState.relayState,
+        connectionStatus = relayUiState.connectionStatus,
         onQrClick = onQrClick,
         onItemClick = { itemId ->
             when {
@@ -378,6 +405,77 @@ fun DashboardScreen(
         },
         modifier = modifier
     ) {
+        // Hide header and bottom bar when not logged in
+        val isLoggedIn = currentAccount != null
+
+        // When not logged in, bypass Scaffold entirely to avoid bottom line artifact
+        if (!isLoggedIn) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!accountsRestored) {
+                    // Account restore in progress
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(48.dp),
+                        strokeWidth = 3.dp,
+                        color = Color(0xFF8B9D83)
+                    )
+                } else {
+                    // Sign-in prompt
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(horizontal = 32.dp, vertical = 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Text(
+                            text = "\uD83D\uDC38",
+                            style = MaterialTheme.typography.displayLarge
+                        )
+                        Text(
+                            text = "Welcome to Ribbit",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        if (onLoginClick != null) {
+                            Button(
+                                onClick = { onLoginClick.invoke() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Login with Amber")
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            HorizontalDivider(modifier = Modifier.weight(1f))
+                            Text(
+                                text = "  or  ",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            HorizontalDivider(modifier = Modifier.weight(1f))
+                        }
+
+                        val loginContext = LocalContext.current
+                        TextButton(
+                            onClick = {
+                                loginContext.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/greenart7c3/Amber")))
+                            }
+                        ) {
+                            Text("Download Amber")
+                        }
+                    }
+                }
+            }
+            return@GlobalSidebar
+        }
+
         Scaffold(
             modifier = if (!isSearchMode) {
                 Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)
@@ -481,8 +579,6 @@ fun DashboardScreen(
                                 "home" -> {
                                     scope.launch {
                                         topAppBarState.heightOffset = 0f
-                                        // ✅ Performance: Use scrollToItem for instant jump (no animation overhead)
-                                        // If already at top, this is virtually free
                                         listState.scrollToItem(0)
                                     }
                                 }
@@ -491,7 +587,7 @@ fun DashboardScreen(
                                 "relays" -> onNavigateTo("relays")
                                 "notifications" -> onNavigateTo("notifications")
                                 "profile" -> onNavigateTo("user_profile")
-                                else -> { /* Other destinations not implemented yet */ }
+                                else -> { }
                             }
                         }
                     )
@@ -553,223 +649,34 @@ fun DashboardScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 8.dp)
+                    contentPadding = PaddingValues(0.dp)
                 ) {
-                    // Connection status indicator from RelayConnectionStateMachine
-                    item(key = "connection_status") {
-                        val relayState = uiState.relayState
-                        val connectionText = when (relayState) {
-                            is RelayState.Disconnected -> "Disconnected"
-                            is RelayState.Connecting -> "Connecting…"
-                            is RelayState.Connected -> "Connected"
-                            is RelayState.Subscribed -> "Connected"
-                            is RelayState.ConnectFailed -> "Connection failed" + (relayState.message?.let { ": $it" } ?: "")
-                        }
-                        val isConnecting = relayState is RelayState.Connecting
-                        val isFailed = relayState is RelayState.ConnectFailed
-                        val stateMachine = com.example.views.relay.RelayConnectionStateMachine.getInstance()
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            color = when (relayState) {
-                                is RelayState.Disconnected -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
-                                is RelayState.Connecting -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                                is RelayState.ConnectFailed -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
-                                else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                            }
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    if (isConnecting) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(16.dp),
-                                            strokeWidth = 2.dp
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                    }
-                                    Text(
-                                        text = buildString {
-                                            append(connectionText)
-                                            uiState.relayCountSummary?.let { append(" · $it") }
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                if (isFailed) {
-                                    TextButton(
-                                        onClick = { stateMachine.requestRetry() }
-                                    ) {
-                                        Text("Retry", style = MaterialTheme.typography.labelMedium)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Account restore in progress: show minimal loading so we don't flash sign-in for logged-in users
-                    if (currentAccount == null && !accountsRestored) {
-                        item(key = "account_restore_loading") {
-                            Box(
-                                modifier = Modifier
-                                    .fillParentMaxHeight()
-                                    .fillMaxWidth(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                LoadingAnimation(
-                                    indicatorSize = 36.dp,
-                                    circleWidth = 3.dp
-                                )
-                            }
-                        }
-                    }
-                    // When signed out (and restore done), show sign-in prompt with key input + Amber
-                    if (currentAccount == null && accountsRestored) {
-                        item(key = "sign_in_feed_message") {
-                            var keyInput by remember { mutableStateOf("") }
-                            var loginError by remember { mutableStateOf<String?>(null) }
-
-                            Box(
-                                modifier = Modifier
-                                    .fillParentMaxHeight()
-                                    .fillMaxWidth(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.padding(horizontal = 32.dp, vertical = 24.dp),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    Text(
-                                        text = "Sign in with Nostr",
-                                        style = MaterialTheme.typography.titleLarge,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = "Enter your key to get started",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-
-                                    Spacer(modifier = Modifier.height(4.dp))
-
-                                    // Key input field
-                                    OutlinedTextField(
-                                        value = keyInput,
-                                        onValueChange = {
-                                            keyInput = it
-                                            loginError = null
-                                        },
-                                        label = { Text("nsec / npub") },
-                                        placeholder = { Text("nsec1... or npub1...") },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true,
-                                        isError = loginError != null
-                                    )
-
-                                    // Error message
-                                    if (loginError != null) {
-                                        Text(
-                                            text = loginError!!,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.error
-                                        )
-                                    }
-
-                                    // Login button
-                                    Button(
-                                        onClick = {
-                                            val error = accountStateViewModel.loginWithKey(keyInput)
-                                            if (error != null) {
-                                                loginError = error
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        enabled = keyInput.isNotBlank()
-                                    ) {
-                                        Text("Login")
-                                    }
-
-                                    // Divider
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        HorizontalDivider(modifier = Modifier.weight(1f))
-                                        Text(
-                                            text = "  or  ",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        HorizontalDivider(modifier = Modifier.weight(1f))
-                                    }
-
-                                    // Amber button
-                                    if (onLoginClick != null) {
-                                        OutlinedButton(
-                                            onClick = { onLoginClick.invoke() },
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text("Login with Amber")
-                                        }
-                                    }
-
-                                    val loginContext = LocalContext.current
-                                    TextButton(
-                                        onClick = {
-                                            loginContext.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/greenart7c3/Amber")))
-                                        }
-                                    ) {
-                                        Text("Download Amber")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Logged in but notes still loading (first load): sage loading animation
-                    if (currentAccount != null && uiState.isLoadingFromRelays && sortedNotes.isEmpty()) {
-                        item(key = "notes_loading") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 48.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                LoadingAnimation(
-                                    indicatorSize = 40.dp,
-                                    circleWidth = 3.dp
-                                )
-                            }
-                        }
-                    }
+                    // New notes counter (tap to load) — connection status lives in sidebar now
                     run {
                         val newCount = if (homeFeedState.isFollowing) uiState.newNotesCountFollowing else uiState.newNotesCountAll
                         val otherCount = if (homeFeedState.isFollowing) uiState.newNotesCountAll else uiState.newNotesCountFollowing
                         if (newCount > 0) {
                             item(key = "new_notes_header") {
                                 Surface(
-                                    onClick = {
-                                        scope.launch {
-                                            viewModel.applyPendingNotes()
-                                            listState.animateScrollToItem(0)
-                                        }
-                                    },
                                     modifier = Modifier.fillMaxWidth(),
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    shadowElevation = 2.dp
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                scope.launch {
+                                                    viewModel.applyPendingNotes()
+                                                    listState.animateScrollToItem(0)
+                                                }
+                                            }
+                                            .padding(horizontal = 16.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
                                             text = "$newCount new note${if (newCount == 1) "" else "s"}",
                                             style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = MaterialTheme.colorScheme.primary
                                         )
                                         if (otherCount > 0) {
                                             Spacer(Modifier.width(8.dp))
@@ -784,14 +691,33 @@ fun DashboardScreen(
                             }
                         }
                     }
+                    // Logged in but notes still loading (first load): full-screen centered expressive spinner
+                    // Spinner stays until notes actually appear in the feed (not just counted in background)
+                    if (sortedNotes.isEmpty()) {
+                        item(key = "notes_loading") {
+                            Box(
+                                modifier = Modifier
+                                    .fillParentMaxHeight()
+                                    .fillMaxWidth(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(48.dp),
+                                    strokeWidth = 3.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
                     // Stable keys (note.id) so LazyColumn recomposes only changed items when the feed list updates.
+                    // contentType enables efficient item recycling across scroll.
                     items(
                         items = sortedNotes,
-                        key = { it.id }
+                        key = { it.id },
+                        contentType = { "note_card" }
                     ) { note ->
                         NoteCard(
                             note = note,
-                            rootAuthorId = note.author.id,
                             onLike = { noteId -> viewModel.toggleLike(noteId) },
                             onShare = { noteId -> /* Handle share */ },
                             onComment = { noteId -> onThreadClick(note, null) },
@@ -825,6 +751,9 @@ fun DashboardScreen(
                             overrideReplyCount = replyCountByNoteId[note.id],
                             overrideZapCount = countsByNoteId[note.id]?.zapCount,
                             overrideReactions = countsByNoteId[note.id]?.reactions,
+                            showHashtagsSection = false,
+                            initialMediaPage = mediaPageForNote(note.id),
+                            onMediaPageChanged = { page -> onMediaPageChanged(note.id, page) },
                             modifier = Modifier.fillMaxWidth()
                         )
                     }

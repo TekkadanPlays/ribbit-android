@@ -122,6 +122,12 @@ fun NoteCard(
     rootAuthorId: String? = null,
     /** When true (e.g. thread view), link embed shows expanded description. */
     expandLinkPreviewInThread: Boolean = false,
+    /** When false, hides hashtags section below body (used in feed contexts). */
+    showHashtagsSection: Boolean = true,
+    /** Initial page index for the media album (shared state from AppViewModel). */
+    initialMediaPage: Int = 0,
+    /** Called when user swipes the media album to a different page. */
+    onMediaPageChanged: (Int) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var isZapMenuExpanded by remember { mutableStateOf(false) }
@@ -154,7 +160,7 @@ fun NoteCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Avatar with shared element support
@@ -225,20 +231,9 @@ fun NoteCard(
                             )
                         }
                     }
-                    if (rootAuthorId == null) {
-                        val formattedTime = remember(note.timestamp) { formatTimestamp(note.timestamp) }
-                        Text(
-                            text = formattedTime,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        )
-                    }
                 }
                 RelayOrbs(relayUrls = note.displayRelayUrls(), onRelayClick = onRelayClick)
             }
-
-            Spacer(modifier = Modifier.height(4.dp))
 
             val uriHandler = LocalUriHandler.current
             val hasBodyText = note.content.isNotBlank() || note.quotedEventIds.isNotEmpty()
@@ -257,30 +252,20 @@ fun NoteCard(
                 Spacer(modifier = Modifier.height(4.dp))
             }
 
-            // HTML embed at top: edge-to-edge in feed, padded in thread view
             val firstPreview = note.urlPreviews.firstOrNull()
-            if (firstPreview != null) {
-                Kind1LinkEmbedBlock(
-                    previewInfo = firstPreview,
-                    expandDescriptionInThread = expandLinkPreviewInThread,
-                    inThreadView = expandLinkPreviewInThread,
-                    onUrlClick = { url -> uriHandler.openUri(url) },
-                    modifier = if (expandLinkPreviewInThread) Modifier.padding(horizontal = 16.dp) else Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-            }
 
-            // Counts row: between embed and body (when action row is shown)
+            // Counts row: above embed and body (when action row is shown)
             if (showActionRow) {
                 val replyCountVal = (overrideReplyCount ?: note.comments).coerceAtLeast(0)
                 val zapCount = (overrideZapCount ?: note.zapCount).coerceAtLeast(0)
                 val reactionCount = (overrideReactions ?: note.reactions).size.coerceAtLeast(0)
-                val countParts = buildList {
-                    add("$replyCountVal repl${if (replyCountVal == 1) "y" else "ies"}")
-                    add("$reactionCount reaction${if (reactionCount == 1) "" else "s"}")
-                    add("$zapCount zap${if (zapCount == 1) "" else "s"}")
-                    if (isZapped && (myZappedAmount ?: 0L) > 0L) add("You zapped ${com.example.views.utils.ZapUtils.formatZapAmount(myZappedAmount!!)}")
-                }
+                val formattedTime = remember(note.timestamp) { formatTimestamp(note.timestamp) }
+                // Colors for count numbers
+                val ribbitGreen = Color(0xFF8FBC8F)
+                val pastelRed = Color(0xFFE57373)
+                val zapYellow = Color(0xFFFFD700)
+                val mutedText = MaterialTheme.colorScheme.onSurfaceVariant
+                val countStyle = MaterialTheme.typography.bodySmall
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -288,216 +273,285 @@ fun NoteCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = countParts.joinToString(" • "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    // Left side: replies • timestamp
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (replyCountVal > 0) {
+                            Text(text = "$replyCountVal", style = countStyle, color = ribbitGreen)
+                            Text(text = " repl${if (replyCountVal == 1) "y" else "ies"}", style = countStyle, color = mutedText)
+                            Text(text = " • ", style = countStyle, color = mutedText)
+                        }
+                        Text(text = formattedTime, style = countStyle, color = mutedText)
+                    }
+                    // Right side: reactions • zaps
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (reactionCount > 0) {
+                            Text(text = "$reactionCount", style = countStyle, color = pastelRed)
+                            Text(text = " reaction${if (reactionCount == 1) "" else "s"}", style = countStyle, color = mutedText)
+                        }
+                        if (reactionCount > 0 && zapCount > 0) {
+                            Text(text = " • ", style = countStyle, color = mutedText)
+                        }
+                        if (zapCount > 0) {
+                            Text(text = "$zapCount", style = countStyle, color = zapYellow)
+                            Text(text = " zap${if (zapCount == 1) "" else "s"}", style = countStyle, color = mutedText)
+                        }
+                    }
                 }
             }
 
+            // HTML embed: below counts, above body text
+            if (firstPreview != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Kind1LinkEmbedBlock(
+                    previewInfo = firstPreview,
+                    expandDescriptionInThread = expandLinkPreviewInThread,
+                    inThreadView = expandLinkPreviewInThread,
+                    onUrlClick = { url -> uriHandler.openUri(url) },
+                    onNoteClick = { onNoteClick(note) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+            }
+
             // Body zone: only when there is text or quoted notes; otherwise embed/media only
-            val linkStyle = SpanStyle(color = MaterialTheme.colorScheme.primary)
-            val contentBlocks = remember(note.content, note.mediaUrls, note.urlPreviews) {
+            val linkStyle = SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // When firstPreview is shown as the top-level embed, pass its URL as "consumed"
+            // so the text builder hides it from body text but does NOT add it to media groups
+            // (the preview URL is a webpage, not an image — adding it to mediaUrls creates blank album entries)
+            val consumedUrls = remember(firstPreview) {
+                if (firstPreview != null) setOf(firstPreview.url) else emptySet()
+            }
+            val contentBlocks = remember(note.content, note.mediaUrls, note.urlPreviews, consumedUrls) {
                 buildNoteContentWithInlinePreviews(
                     note.content,
                     note.mediaUrls.toSet(),
                     note.urlPreviews,
                     linkStyle,
-                    profileCache
+                    profileCache,
+                    consumedUrls
                 )
             }
-            if (hasBodyText) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                shape = RectangleShape,
-                tonalElevation = 0.dp,
-                shadowElevation = 0.dp
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.Top
-                ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    contentBlocks.forEach { block ->
-                        when (block) {
-                            is NoteContentBlock.Content -> {
-                                val annotated = block.annotated
-                                if (annotated.isNotEmpty()) {
-                                    ClickableNoteContent(
-                                        text = annotated,
-                                        style = NoteBodyTextStyle.copy(
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        ),
-                                        onClick = { offset ->
-                                            val profile = annotated.getStringAnnotations(tag = "PROFILE", start = offset, end = offset).firstOrNull()
-                                            val url = annotated.getStringAnnotations(tag = "URL", start = offset, end = offset).firstOrNull()
-                                            val naddr = annotated.getStringAnnotations(tag = "NADDR", start = offset, end = offset).firstOrNull()
-                                            when {
-                                                profile != null -> onProfileClick(profile.item)
-                                                url != null -> uriHandler.openUri(url.item)
-                                                naddr != null -> uriHandler.openUri(naddr.item)
-                                                else -> onNoteClick(note)
-                                            }
+            // Collect all media URLs across all MediaGroup blocks for fullscreen viewer
+            val allMediaUrls = remember(contentBlocks) {
+                contentBlocks.filterIsInstance<NoteContentBlock.MediaGroup>().flatMap { it.urls }
+                    .ifEmpty { note.mediaUrls }
+            }
+
+            // Render interleaved content blocks: text surfaces, inline media carousels, and previews
+            contentBlocks.forEach { block ->
+                when (block) {
+                    is NoteContentBlock.Content -> {
+                        val annotated = block.annotated
+                        if (annotated.isNotEmpty()) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                shape = RectangleShape,
+                                tonalElevation = 0.dp,
+                                shadowElevation = 0.dp
+                            ) {
+                                ClickableNoteContent(
+                                    text = annotated,
+                                    style = NoteBodyTextStyle.copy(
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    ),
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                                    onClick = { offset ->
+                                        val profile = annotated.getStringAnnotations(tag = "PROFILE", start = offset, end = offset).firstOrNull()
+                                        val url = annotated.getStringAnnotations(tag = "URL", start = offset, end = offset).firstOrNull()
+                                        val naddr = annotated.getStringAnnotations(tag = "NADDR", start = offset, end = offset).firstOrNull()
+                                        when {
+                                            profile != null -> onProfileClick(profile.item)
+                                            url != null -> uriHandler.openUri(url.item)
+                                            naddr != null -> uriHandler.openUri(naddr.item)
+                                            else -> onNoteClick(note)
                                         }
-                                    )
-                                }
-                            }
-                            is NoteContentBlock.Preview -> {
-                                // Inline preview block skipped when we show top-right thumbnail
-                                if (firstPreview == null) {
-                                    UrlPreviewCard(
-                                        previewInfo = block.previewInfo,
-                                        onUrlClick = { url -> uriHandler.openUri(url) },
-                                        onUrlLongClick = { _ -> }
-                                    )
-                                }
+                                    }
+                                )
                             }
                         }
                     }
-                    // Quoted notes (nostr:nevent1... / nostr:note1...)
-                    if (note.quotedEventIds.isNotEmpty()) {
-                        var quotedMetas by remember(note.id) { mutableStateOf<Map<String, QuotedNoteMeta>>(emptyMap()) }
-                        LaunchedEffect(note.quotedEventIds) {
-                            note.quotedEventIds.forEach { id ->
-                                if (id !in quotedMetas) {
-                                    val meta = QuotedNoteCache.get(id)
-                                    if (meta != null) quotedMetas = quotedMetas + (id to meta)
-                                }
-                            }
+                    is NoteContentBlock.MediaGroup -> {
+                        // Inline album carousel at the correct position in the text flow
+                        val mediaList = block.urls.take(10)
+                        // Compute the starting index of this group within allMediaUrls for fullscreen viewer
+                        val groupStartIndex = remember(allMediaUrls, mediaList) {
+                            allMediaUrls.indexOf(mediaList.first()).coerceAtLeast(0)
                         }
-                        if (quotedMetas.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                quotedMetas.values.forEach { meta ->
-                                    Surface(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .clickable { /* Optional: open thread */ },
-                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                        border = BorderStroke(
-                                            1.dp,
-                                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                                        ),
-                                        shape = RoundedCornerShape(8.dp)
-                                    ) {
-                                        Column(modifier = Modifier.padding(12.dp)) {
-                                            Text(
-                                                text = "Quoting: ${meta.authorId.take(8)}…",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.primary
+                        val pagerState = rememberPagerState(
+                            pageCount = { mediaList.size },
+                            initialPage = initialMediaPage.coerceIn(0, (mediaList.size - 1).coerceAtLeast(0))
+                        )
+                        // Report page changes back so album position persists
+                        LaunchedEffect(pagerState.currentPage) {
+                            onMediaPageChanged(pagerState.currentPage)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(280.dp)
+                        ) {
+                            HorizontalPager(
+                                state = pagerState,
+                                modifier = Modifier.fillMaxSize(),
+                                pageSpacing = 0.dp
+                            ) { page ->
+                                val offsetFromCenter = page - pagerState.currentPage - pagerState.currentPageOffsetFraction
+                                val scale = 1f - 0.15f * abs(offsetFromCenter).coerceIn(0f, 1f)
+                                val alphaVal = 1f - 0.25f * abs(offsetFromCenter).coerceIn(0f, 1f)
+                                val url = mediaList[page]
+                                val isVideo = UrlDetector.isVideoUrl(url)
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .graphicsLayer {
+                                            scaleX = scale
+                                            scaleY = scale
+                                            this.alpha = alphaVal
+                                        }
+                                        .clickable {
+                                            // Open fullscreen viewer with ALL media from the note, starting at the correct index
+                                            val fullIndex = groupStartIndex + page
+                                            if (isVideo) onVideoClick(allMediaUrls, fullIndex) else onImageTap(note, allMediaUrls, fullIndex)
+                                        }
+                                ) {
+                                    if (isVideo) {
+                                        InlineVideoPlayer(
+                                            url = url,
+                                            modifier = Modifier.fillMaxSize(),
+                                            onFullscreenClick = {
+                                                val fullIndex = groupStartIndex + page
+                                                onVideoClick(allMediaUrls, fullIndex)
+                                            }
+                                        )
+                                    } else {
+                                        AsyncImage(
+                                            model = url,
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                        IconButton(
+                                            onClick = {
+                                                val fullIndex = groupStartIndex + page
+                                                onOpenImageViewer(allMediaUrls, fullIndex)
+                                            },
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(8.dp)
+                                                .size(36.dp),
+                                            colors = IconButtonDefaults.iconButtonColors(
+                                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                                contentColor = MaterialTheme.colorScheme.onSurface
                                             )
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            Text(
-                                                text = meta.contentSnippet,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 3,
-                                                overflow = TextOverflow.Ellipsis
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Search,
+                                                contentDescription = "Open in viewer"
                                             )
                                         }
                                     }
                                 }
                             }
-                        }
-                    }
-                }
-            }
-            }
-            }
-            if (note.mediaUrls.isNotEmpty()) {
-                val mediaList = note.mediaUrls.take(10)
-                val pagerState = rememberPagerState(
-                    pageCount = { mediaList.size },
-                    initialPage = 0
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(280.dp)
-                ) {
-                    HorizontalPager(
-                        state = pagerState,
-                        modifier = Modifier.fillMaxSize(),
-                        pageSpacing = 0.dp
-                    ) { page ->
-                        val offsetFromCenter = page - pagerState.currentPage - pagerState.currentPageOffsetFraction
-                        val scale = 1f - 0.15f * abs(offsetFromCenter).coerceIn(0f, 1f)
-                        val alpha = 1f - 0.25f * abs(offsetFromCenter).coerceIn(0f, 1f)
-                        val url = mediaList[page]
-                        val isVideo = UrlDetector.isVideoUrl(url)
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .graphicsLayer {
-                                    scaleX = scale
-                                    scaleY = scale
-                                    this.alpha = alpha
-                                }
-                                .clickable {
-                                    if (isVideo) onVideoClick(mediaList, page) else onImageTap(note, mediaList, page)
-                                }
-                        ) {
-                            if (isVideo) {
-                                InlineVideoPlayer(
-                                    url = url,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            } else {
-                                AsyncImage(
-                                    model = url,
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                                IconButton(
-                                    onClick = { onOpenImageViewer(mediaList, page) },
+                            if (mediaList.size > 1) {
+                                Row(
                                     modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(8.dp)
-                                        .size(36.dp),
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
-                                        contentColor = MaterialTheme.colorScheme.onSurface
-                                    )
+                                        .align(Alignment.BottomCenter)
+                                        .padding(bottom = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Search,
-                                        contentDescription = "Open in viewer"
-                                    )
+                                    repeat(mediaList.size) { index ->
+                                        Box(
+                                            modifier = Modifier
+                                                .padding(horizontal = 3.dp)
+                                                .size(if (pagerState.currentPage == index) 8.dp else 6.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    if (pagerState.currentPage == index)
+                                                        MaterialTheme.colorScheme.primary
+                                                    else
+                                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                                )
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
-                    if (mediaList.size > 1) {
-                        Row(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            repeat(mediaList.size) { index ->
-                                Box(
-                                    modifier = Modifier
-                                        .padding(horizontal = 3.dp)
-                                        .size(if (pagerState.currentPage == index) 8.dp else 6.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (pagerState.currentPage == index)
-                                                MaterialTheme.colorScheme.primary
-                                            else
-                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    is NoteContentBlock.Preview -> {
+                        // Inline preview block skipped when we show top-right thumbnail
+                        if (firstPreview == null) {
+                            UrlPreviewCard(
+                                previewInfo = block.previewInfo,
+                                onUrlClick = { url -> uriHandler.openUri(url) },
+                                onUrlLongClick = { _ -> }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Quoted notes (nostr:nevent1... / nostr:note1...)
+            if (note.quotedEventIds.isNotEmpty()) {
+                var quotedMetas by remember(note.id) { mutableStateOf<Map<String, QuotedNoteMeta>>(emptyMap()) }
+                LaunchedEffect(note.quotedEventIds) {
+                    note.quotedEventIds.forEach { id ->
+                        if (id !in quotedMetas) {
+                            val meta = QuotedNoteCache.get(id)
+                            if (meta != null) quotedMetas = quotedMetas + (id to meta)
+                        }
+                    }
+                }
+                if (quotedMetas.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        quotedMetas.values.forEach { meta ->
+                            val quotedAuthor = remember(meta.authorId) {
+                                profileCache.resolveAuthor(meta.authorId)
+                            }
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { /* Optional: open thread */ },
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        ProfilePicture(
+                                            author = quotedAuthor,
+                                            size = 20.dp,
+                                            onClick = { onProfileClick(meta.authorId) }
                                         )
-                                )
+                                        Text(
+                                            text = quotedAuthor.displayName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = meta.contentSnippet,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }
@@ -505,7 +559,7 @@ fun NoteCard(
             }
 
             // Hashtags
-            if (note.hashtags.isNotEmpty()) {
+            if (showHashtagsSection && note.hashtags.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -517,13 +571,11 @@ fun NoteCard(
             }
 
             if (showActionRow) {
-            Spacer(modifier = Modifier.height(8.dp))
-
             // Action buttons - 6 icons total with expanded hitboxes
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {

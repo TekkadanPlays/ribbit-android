@@ -218,6 +218,8 @@ class ProfileMetadataCache {
             val nip05 = sanitizeKind0String(parsed.nip05, 128)
             val website = sanitizeKind0String(parsed.website, 256)
             val lud16 = sanitizeKind0String(parsed.lud16, 128)
+            val banner = sanitizeKind0String(parsed.banner, 512)
+            val pronouns = sanitizeKind0String(parsed.pronouns, 32)
             Author(
                 id = key,
                 username = username,
@@ -227,7 +229,9 @@ class ProfileMetadataCache {
                 about = about?.takeIf { it.isNotBlank() },
                 nip05 = nip05?.takeIf { it.isNotBlank() },
                 website = website?.takeIf { it.isNotBlank() },
-                lud16 = lud16?.takeIf { it.isNotBlank() }
+                lud16 = lud16?.takeIf { it.isNotBlank() },
+                banner = banner?.takeIf { it.isNotBlank() },
+                pronouns = pronouns?.takeIf { it.isNotBlank() }
             )
         } catch (e: Exception) {
             Log.w(TAG, "Parse kind-0 failed: ${e.message}")
@@ -345,6 +349,8 @@ class ProfileMetadataCache {
         val about: String? = null,
         val nip05: String? = null,
         val website: String? = null,
-        val lud16: String? = null
+        val lud16: String? = null,
+        val banner: String? = null,
+        val pronouns: String? = null
     )
 }

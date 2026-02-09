@@ -353,6 +353,9 @@ private fun NoteCardContent(
                                     )
                                 }
                             }
+                            is NoteContentBlock.MediaGroup -> {
+                                // Media groups handled by the bottom carousel in thread view
+                            }
                         }
                     }
                     if (note.quotedEventIds.isNotEmpty()) {
@@ -442,7 +445,8 @@ private fun NoteCardContent(
                             if (isVideo) {
                                 InlineVideoPlayer(
                                     url = url,
-                                    modifier = Modifier.fillMaxSize()
+                                    modifier = Modifier.fillMaxSize(),
+                                    onFullscreenClick = { onVideoClick(mediaList, page) }
                                 )
                             } else {
                                 AsyncImage(

@@ -83,21 +83,32 @@ fun RelayOrbs(
                 contentAlignment = Alignment.Center
             ) {
                 if (!iconUrl.isNullOrBlank()) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(iconUrl)
-                            .crossfade(true)
-                            .size(44) // 22dp * 2 for density — avoids decoding full-size images
-                            .memoryCacheKey("relay_icon_$relayUrl")
-                            .memoryCachePolicy(CachePolicy.ENABLED)
-                            .diskCachePolicy(CachePolicy.ENABLED)
-                            .build(),
-                        contentDescription = "Relay icon",
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
+                    var loadFailed by remember(iconUrl) { mutableStateOf(false) }
+                    if (!loadFailed) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(iconUrl)
+                                .crossfade(true)
+                                .size(44) // 22dp * 2 for density — avoids decoding full-size images
+                                .memoryCacheKey("relay_icon_$relayUrl")
+                                .memoryCachePolicy(CachePolicy.ENABLED)
+                                .diskCachePolicy(CachePolicy.ENABLED)
+                                .build(),
+                            contentDescription = "Relay icon",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop,
+                            onError = { loadFailed = true }
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Outlined.Router,
+                            contentDescription = "Relay",
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 } else {
                     Icon(
                         imageVector = Icons.Outlined.Router,

@@ -139,20 +139,36 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
                 val hex = account.toHexKey() ?: return@onEach
                 if (pubkey != hex) return@onEach
                 val author = ProfileMetadataCache.getInstance().getAuthor(pubkey) ?: return@onEach
-                _authState.value = _authState.value.copy(
-                    userProfile = _authState.value.userProfile?.copy(
-                        displayName = author.displayName,
-                        picture = author.avatarUrl
+                val existingProfile = _authState.value.userProfile
+                val updatedProfile = if (existingProfile != null) {
+                    existingProfile.copy(
+                        displayName = author.displayName.ifBlank { existingProfile.displayName },
+                        name = author.username.ifBlank { existingProfile.name },
+                        picture = author.avatarUrl ?: existingProfile.picture,
+                        about = author.about ?: existingProfile.about,
+                        nip05 = author.nip05 ?: existingProfile.nip05
                     )
-                )
+                } else {
+                    UserProfile(
+                        pubkey = hex,
+                        displayName = author.displayName,
+                        name = author.username,
+                        picture = author.avatarUrl,
+                        about = author.about,
+                        nip05 = author.nip05,
+                        createdAt = System.currentTimeMillis()
+                    )
+                }
+                _authState.value = _authState.value.copy(userProfile = updatedProfile)
                 val updatedAccount = account.copy(
-                    displayName = author.displayName,
-                    picture = author.avatarUrl
+                    displayName = author.displayName.ifBlank { account.displayName },
+                    picture = author.avatarUrl ?: account.picture
                 )
                 _currentAccount.value = updatedAccount
                 val updatedList = _savedAccounts.value.map { if (it.npub == account.npub) updatedAccount else it }
                 _savedAccounts.value = updatedList
                 saveSavedAccounts(updatedList)
+                Log.d("AccountStateViewModel", "📸 Profile updated: picture=${author.avatarUrl?.take(40)}, name=${author.displayName}")
             }
             .launchIn(viewModelScope)
 

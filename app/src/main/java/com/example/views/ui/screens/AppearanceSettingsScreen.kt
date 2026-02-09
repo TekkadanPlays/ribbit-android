@@ -1,8 +1,12 @@
 package com.example.views.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -12,9 +16,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.example.views.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -22,10 +28,11 @@ fun AppearanceSettingsScreen(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var showThemeDialog by remember { mutableStateOf(false) }
-    var isDynamicColorEnabled by remember { mutableStateOf(true) }
-    var selectedTheme by remember { mutableStateOf("System default") }
-    
+    val currentThemeMode by ThemePreferences.themeMode.collectAsState()
+    val currentAccent by ThemePreferences.accentColor.collectAsState()
+    var showThemeSheet by remember { mutableStateOf(false) }
+    var showAccentSheet by remember { mutableStateOf(false) }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -53,55 +60,60 @@ fun AppearanceSettingsScreen(
                 .padding(paddingValues)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Theme Selection
+            // Theme mode
             AppearanceSettingsItem(
                 icon = Icons.Outlined.Palette,
                 title = "Theme",
-                subtitle = selectedTheme,
-                onClick = { showThemeDialog = true }
+                subtitle = currentThemeMode.label,
+                onClick = { showThemeSheet = true }
             )
-            
+
             HorizontalDivider(
-                thickness = 1.dp, 
+                thickness = 1.dp,
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
             )
-            
-            // Dynamic Color Toggle
+
+            // Accent color
             AppearanceSettingsItem(
                 icon = Icons.Outlined.ColorLens,
-                title = "Dynamic color",
-                subtitle = if (isDynamicColorEnabled) "Enabled" else "Disabled",
-                onClick = { isDynamicColorEnabled = !isDynamicColorEnabled },
+                title = "Accent color",
+                subtitle = "${currentAccent.emoji} ${currentAccent.label}",
+                onClick = { showAccentSheet = true },
                 trailing = {
-                    Switch(
-                        checked = isDynamicColorEnabled,
-                        onCheckedChange = { isDynamicColorEnabled = it }
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
                     )
                 }
             )
-            
-            // Customize Colors (disabled when dynamic color is enabled)
-            AppearanceSettingsItem(
-                icon = Icons.Outlined.Tune,
-                title = "Customize colors",
-                subtitle = if (isDynamicColorEnabled) "Disabled when dynamic color is on" else "Customize your theme colors",
-                onClick = { if (!isDynamicColorEnabled) { /* TODO: Navigate to color customization */ } },
-                enabled = !isDynamicColorEnabled
-            )
-            
+
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
-    
-    // Theme Selection Dialog
-    if (showThemeDialog) {
-        ThemeSelectionDialog(
-            currentTheme = selectedTheme,
-            onThemeSelected = { theme ->
-                selectedTheme = theme
-                showThemeDialog = false
+
+    // Theme mode bottom sheet
+    if (showThemeSheet) {
+        ThemeModeSheet(
+            current = currentThemeMode,
+            onSelected = { mode ->
+                ThemePreferences.setThemeMode(mode)
+                showThemeSheet = false
             },
-            onDismiss = { showThemeDialog = false }
+            onDismiss = { showThemeSheet = false }
+        )
+    }
+
+    // Accent color bottom sheet
+    if (showAccentSheet) {
+        AccentColorSheet(
+            current = currentAccent,
+            onSelected = { accent ->
+                ThemePreferences.setAccentColor(accent)
+                showAccentSheet = false
+            },
+            onDismiss = { showAccentSheet = false }
         )
     }
 }
@@ -131,15 +143,13 @@ private fun AppearanceSettingsItem(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.bodyLarge.copy(
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                )
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
             )
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                )
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )
         }
         if (trailing != null) {
@@ -154,54 +164,146 @@ private fun AppearanceSettingsItem(
     }
 }
 
+// ── Theme mode bottom sheet ─────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ThemeSelectionDialog(
-    currentTheme: String,
-    onThemeSelected: (String) -> Unit,
+private fun ThemeModeSheet(
+    current: ThemeMode,
+    onSelected: (ThemeMode) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val themes = listOf("Light", "Dark", "System default")
-    
-    AlertDialog(
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = { Text("Choose Theme") },
-        text = {
-            Column {
-                themes.forEach { theme ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onThemeSelected(theme) }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = currentTheme == theme,
-                            onClick = { onThemeSelected(theme) }
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+            Text(
+                text = "Theme",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+            ThemeMode.entries.forEach { mode ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onSelected(mode) }
+                        .padding(vertical = 12.dp, horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = current == mode,
+                        onClick = { onSelected(mode) },
+                        colors = RadioButtonDefaults.colors(
+                            selectedColor = MaterialTheme.colorScheme.primary,
+                            unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = mode.label,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = if (current == mode) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+// ── Accent color bottom sheet ───────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AccentColorSheet(
+    current: AccentColor,
+    onSelected: (AccentColor) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+            Text(
+                text = "Accent Color",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+            AccentColor.entries.forEach { accent ->
+                val swatchColor = accentSwatchColor(accent)
+                val isSelected = current == accent
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .then(
+                            if (isSelected) Modifier.background(
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            ) else Modifier
+                        )
+                        .clickable { onSelected(accent) }
+                        .padding(vertical = 12.dp, horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Color swatch
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(swatchColor)
+                            .then(
+                                if (isSelected) Modifier.border(
+                                    2.dp,
+                                    MaterialTheme.colorScheme.onSurface,
+                                    CircleShape
+                                ) else Modifier
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = "Selected",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column {
                         Text(
-                            text = theme,
-                            style = MaterialTheme.typography.bodyLarge
+                            text = "${accent.emoji} ${accent.label}",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
                         )
                     }
                 }
+                if (accent != AccentColor.entries.last()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Done")
-            }
+            Spacer(modifier = Modifier.height(24.dp))
         }
-    )
+    }
 }
 
-@Preview(showBackground = true)
-@Composable
-fun AppearanceSettingsScreenPreview() {
-    MaterialTheme {
-        AppearanceSettingsScreen(
-            onBackClick = {}
-        )
-    }
+/** Returns the representative swatch color for an accent (dark-mode primary). */
+private fun accentSwatchColor(accent: AccentColor): Color = when (accent) {
+    AccentColor.GREEN -> SageGreen80
+    AccentColor.PURPLE -> NostrPurple80
+    AccentColor.ORANGE -> BitcoinOrange80
+    AccentColor.RED -> LoveRed80
 }

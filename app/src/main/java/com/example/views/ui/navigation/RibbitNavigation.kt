@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -17,7 +18,12 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -187,7 +193,8 @@ fun RibbitNavigation(
 
     // Main screens that should show the bottom navigation
     val mainScreenRoutes = setOf("dashboard", "notifications", "relays", "messages", "profile", "topics")
-    val showBottomNav = (currentRoute in mainScreenRoutes || currentRoute?.startsWith("profile") == true)
+    val showBottomNav = currentAccount != null
+        && (currentRoute in mainScreenRoutes || currentRoute?.startsWith("profile") == true)
         && currentRoute?.startsWith("thread") != true
         && overlayThreadNoteId == null
 
@@ -430,9 +437,12 @@ fun RibbitNavigation(
                     val fallbackRelayUrls = remember(currentAccount) {
                         currentAccount?.toHexKey()?.let { pubkey ->
                             val categories = storageManager.loadCategories(pubkey)
-                            val favoriteCategory = categories.firstOrNull { it.isFavorite }
-                                ?: categories.firstOrNull { it.isDefault }
-                            favoriteCategory?.relays?.map { it.url } ?: emptyList()
+                            val subscribedRelays = categories.filter { it.isSubscribed }
+                                .flatMap { it.relays }.map { it.url }.distinct()
+                            subscribedRelays.ifEmpty {
+                                val defaultCat = categories.firstOrNull { it.isDefault }
+                                defaultCat?.relays?.map { it.url } ?: emptyList()
+                            }
                         } ?: emptyList()
                     }
                     val cacheRelayUrls = remember(currentAccount) {
@@ -480,6 +490,8 @@ fun RibbitNavigation(
                                 appViewModel.openVideoViewer(urls, index)
                                 navController.navigate("video_viewer")
                             },
+                            mediaPageForNote = { noteId -> appViewModel.getMediaPage(noteId) },
+                            onMediaPageChanged = { noteId, page -> appViewModel.updateMediaPage(noteId, page) },
                             onScrollToTop = {
                                 coroutineScope.launch {
                                     dashboardListState.animateScrollToItem(0)
@@ -608,7 +620,9 @@ fun RibbitNavigation(
                                         },
                                         onHeaderAccountsClick = { },
                                         onHeaderQrCodeClick = { navController.navigate("user_qr") },
-                                        onHeaderSettingsClick = { navController.navigate("settings") }
+                                        onHeaderSettingsClick = { navController.navigate("settings") },
+                                        mediaPageForNote = { noteId -> appViewModel.getMediaPage(noteId) },
+                                        onMediaPageChanged = { noteId, page -> appViewModel.updateMediaPage(noteId, page) }
                                     )
                                 }
                             }
@@ -651,11 +665,34 @@ fun RibbitNavigation(
                     val highlightReplyId = backStackEntry.arguments?.getString("highlightReplyId")
                     val context = LocalContext.current
 
-                    // Get note from AppViewModel's selected note (no fake fallback)
+                    // Get note from AppViewModel's selected note; wait for async fetch (e.g. from notifications)
                     val appState by appViewModel.appState.collectAsState()
-                    val note = appState.selectedNote
-                    if (note == null || note.id != noteId) {
-                        LaunchedEffect(Unit) { navController.popBackStack() }
+                    val note = appState.selectedNote?.takeIf { it.id == noteId }
+                    if (note == null) {
+                        // Show loading while waiting for the note to be fetched (e.g. notification → thread)
+                        var waitElapsed by remember { mutableStateOf(0) }
+                        LaunchedEffect(noteId) {
+                            while (waitElapsed < 8) {
+                                kotlinx.coroutines.delay(1000)
+                                waitElapsed++
+                            }
+                            // Timed out — note never arrived
+                            navController.popBackStack()
+                        }
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator()
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text(
+                                    text = "Loading thread…",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                         return@composable
                     }
 
@@ -667,9 +704,12 @@ fun RibbitNavigation(
                     val fallbackRelayUrls = remember(currentAccount) {
                         currentAccount?.toHexKey()?.let { pubkey ->
                             val categories = storageManager.loadCategories(pubkey)
-                            val favoriteCategory = categories.firstOrNull { it.isFavorite }
-                                ?: categories.firstOrNull { it.isDefault }
-                            favoriteCategory?.relays?.map { it.url } ?: emptyList()
+                            val subscribedRelays = categories.filter { it.isSubscribed }
+                                .flatMap { it.relays }.map { it.url }.distinct()
+                            subscribedRelays.ifEmpty {
+                                val defaultCat = categories.firstOrNull { it.isDefault }
+                                defaultCat?.relays?.map { it.url } ?: emptyList()
+                            }
                         } ?: emptyList()
                     }
                     val relayUrls = appState.threadRelayUrls?.takeIf { it.isNotEmpty() } ?: fallbackRelayUrls
@@ -811,7 +851,9 @@ fun RibbitNavigation(
                             },
                             onHeaderAccountsClick = { },
                             onHeaderQrCodeClick = { navController.navigate("user_qr") },
-                            onHeaderSettingsClick = { navController.navigate("settings") }
+                            onHeaderSettingsClick = { navController.navigate("settings") },
+                            mediaPageForNote = { noteId -> appViewModel.getMediaPage(noteId) },
+                            onMediaPageChanged = { noteId, page -> appViewModel.updateMediaPage(noteId, page) }
                     )
                     }
                 }
@@ -825,24 +867,42 @@ fun RibbitNavigation(
                     )
                 }
 
-                // Full-screen image viewer (Save, HD, back)
-                composable("image_viewer") {
+                // Full-screen image viewer (Save, HD, back) — instant back, no slide
+                composable(
+                    "image_viewer",
+                    enterTransition = { fadeIn(animationSpec = tween(150)) },
+                    exitTransition = { fadeOut(animationSpec = tween(150)) },
+                    popEnterTransition = { EnterTransition.None },
+                    popExitTransition = { fadeOut(animationSpec = tween(100)) }
+                ) {
                     val appState by appViewModel.appState.collectAsState()
                     val urls = appState.imageViewerUrls
                     if (urls != null) {
+                        val selectedNoteId = appState.selectedNote?.id
                         ImageContentViewerScreen(
                             urls = urls,
                             initialIndex = appState.imageViewerInitialIndex,
                             onBackClick = {
                                 appViewModel.clearImageViewer()
                                 navController.popBackStack()
+                            },
+                            onPageChanged = { page ->
+                                if (selectedNoteId != null) {
+                                    appViewModel.updateMediaPage(selectedNoteId, page)
+                                }
                             }
                         )
                     }
                 }
 
-                // Full-screen video viewer
-                composable("video_viewer") {
+                // Full-screen video viewer — instant back, no slide
+                composable(
+                    "video_viewer",
+                    enterTransition = { fadeIn(animationSpec = tween(150)) },
+                    exitTransition = { fadeOut(animationSpec = tween(150)) },
+                    popEnterTransition = { EnterTransition.None },
+                    popExitTransition = { fadeOut(animationSpec = tween(100)) }
+                ) {
                     val appState by appViewModel.appState.collectAsState()
                     val urls = appState.videoViewerUrls
                     if (urls != null) {
@@ -1202,9 +1262,7 @@ fun RibbitNavigation(
                 composable("notifications") {
                     NotificationsScreen(
                             onBackClick = {
-                                navController.navigate("dashboard") {
-                                    popUpTo("dashboard") { inclusive = false }
-                                }
+                                navController.popBackStack()
                             },
                             onNoteClick = { note ->
                                 appViewModel.updateSelectedNote(note)

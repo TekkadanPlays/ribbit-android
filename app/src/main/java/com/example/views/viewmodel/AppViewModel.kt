@@ -35,6 +35,8 @@ data class AppState(
     val backPressCount: Int = 0,
     val showExitSnackbar: Boolean = false,
     val isExitWindowActive: Boolean = false,
+    /** Shared media album page index per note ID so album position persists across feed/thread/viewer. */
+    val mediaPageByNoteId: Map<String, Int> = emptyMap(),
     /** Note being replied to (shown at top of reply compose screen). Cleared after navigation. */
     val replyToNote: Note? = null
 )
@@ -90,6 +92,16 @@ class AppViewModel : ViewModel() {
     fun clearVideoViewer() {
         _appState.value = _appState.value.copy(videoViewerUrls = null, videoViewerInitialIndex = 0)
     }
+
+    /** Store the current album page for a note so it persists across feed/thread/viewer. */
+    fun updateMediaPage(noteId: String, page: Int) {
+        val current = _appState.value.mediaPageByNoteId
+        if (current[noteId] != page) {
+            _appState.value = _appState.value.copy(mediaPageByNoteId = current + (noteId to page))
+        }
+    }
+
+    fun getMediaPage(noteId: String): Int = _appState.value.mediaPageByNoteId[noteId] ?: 0
 
     fun updateThreadScrollPosition(position: Int) {
         _appState.value = _appState.value.copy(threadScrollPosition = position)

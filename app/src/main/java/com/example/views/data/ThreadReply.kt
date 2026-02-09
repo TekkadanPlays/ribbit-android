@@ -133,7 +133,9 @@ data class ThreadReply(
 data class ThreadedReply(
     val reply: ThreadReply,
     val children: List<ThreadedReply> = emptyList(),
-    val level: Int = 0
+    val level: Int = 0,
+    /** True when this reply's parent event wasn't fetched (orphan promoted to root). */
+    val isOrphan: Boolean = false
 ) {
     /**
      * Get total reply count including all nested children

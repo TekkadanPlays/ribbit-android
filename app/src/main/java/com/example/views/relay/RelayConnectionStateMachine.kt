@@ -372,13 +372,11 @@ class RelayConnectionStateMachine {
                         since = sevenDaysAgo
                     )
                     val filterKind11 = Filter(kinds = listOf(11), limit = 100, since = sevenDaysAgo)
+                    // Counts (kind-7, kind-9735) are now handled by NoteCountsRepository via
+                    // a dedicated temporary subscription to NIP-65 indexer relays. We no longer
+                    // piggyback counts filters on the main feed subscription.
                     val countsIds = countsNoteIds?.takeIf { it.isNotEmpty() } ?: emptySet()
-                    val baseFilters = listOf(filterKind1, filterKind11)
-                    val countsFilters = if (countsIds.isEmpty()) emptyList() else listOf(
-                        Filter(kinds = listOf(7), tags = mapOf("e" to countsIds.toList())),
-                        Filter(kinds = listOf(9735), tags = mapOf("e" to countsIds.toList()))
-                    )
-                    val allFilters = baseFilters + countsFilters
+                    val allFilters = listOf(filterKind1, filterKind11)
                     relayFilters = relayUrls.associate { NormalizedRelayUrl(it) to allFilters }
                     currentSubId = RandomInstance.randomChars(10)
                     val subId = currentSubId!!
@@ -562,6 +560,26 @@ class RelayConnectionStateMachine {
     ): TemporarySubscriptionHandle {
         if (relayUrls.isEmpty()) return NoOpTemporaryHandle
         val relayFilters = relayUrls.associate { NormalizedRelayUrl(it) to listOf(filter) }
+        val subscription = NostrClientSubscription(
+            client = nostrClient,
+            filter = { relayFilters },
+            onEvent = onEvent
+        )
+        nostrClient.connect()
+        return TemporarySubscriptionHandleImpl(subscription)
+    }
+
+    /**
+     * One-off subscription with multiple filters (e.g. kind-7 + kind-9735 for counts).
+     * All filters are sent to every relay in the list.
+     */
+    fun requestTemporarySubscription(
+        relayUrls: List<String>,
+        filters: List<Filter>,
+        onEvent: (Event) -> Unit
+    ): TemporarySubscriptionHandle {
+        if (relayUrls.isEmpty() || filters.isEmpty()) return NoOpTemporaryHandle
+        val relayFilters = relayUrls.associate { NormalizedRelayUrl(it) to filters }
         val subscription = NostrClientSubscription(
             client = nostrClient,
             filter = { relayFilters },

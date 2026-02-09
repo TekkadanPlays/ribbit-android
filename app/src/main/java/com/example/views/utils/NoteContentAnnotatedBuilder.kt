@@ -10,6 +10,7 @@ import com.vitorpamplona.quartz.nip19Bech32.Nip19Parser
 import com.vitorpamplona.quartz.nip19Bech32.entities.NAddress
 import com.vitorpamplona.quartz.nip19Bech32.entities.NEvent
 import com.vitorpamplona.quartz.nip19Bech32.entities.NNote
+import com.vitorpamplona.quartz.nip19Bech32.entities.NProfile
 import com.vitorpamplona.quartz.nip19Bech32.entities.NPub
 
 private val npubPattern = Regex(
@@ -22,6 +23,11 @@ private val neventNotePattern = Regex(
 )
 // NIP-08-style: @ followed by 64-char hex, or bare 64-char hex (word boundary so we don't match longer strings)
 private val hexPubkeyPattern = Regex("(?<![0-9a-fA-F])@?([0-9a-fA-F]{64})(?![0-9a-fA-F])")
+// NIP-19 nprofile (profile with relay hints)
+private val nprofilePattern = Regex(
+    "(nostr:)?@?(nprofile1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]+)",
+    RegexOption.IGNORE_CASE
+)
 // NIP-19 naddr (addressable events, e.g. communities)
 private val naddrPattern = Regex(
     "(nostr:)?@?(naddr1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]+)",
@@ -34,6 +40,11 @@ private const val SEG_NPUB = 1
 private const val SEG_NEVENT = 2
 private const val SEG_EMBEDDED_MEDIA = 3
 private const val SEG_NADDR = 4
+private const val SEG_NPROFILE = 5
+private const val SEG_HASHTAG = 6
+
+// Hashtag pattern: # followed by word characters (letters, digits, underscore), at least 1 char
+private val hashtagPattern = Regex("(?<=\\s|^)#(\\w+)", RegexOption.IGNORE_CASE)
 
 /**
  * Builds AnnotatedString for note content: clickable URLs (excluding embedded media),
@@ -95,6 +106,18 @@ fun buildNoteContentAnnotatedString(
         segments.add(Segment(match.range.first, match.range.last + 1, SEG_NPUB, hex.lowercase()))
     }
 
+    // NIP-19 nprofile (profile with relay hints) – resolve to @displayName like npub
+    nprofilePattern.findAll(content).forEach { match ->
+        val fullUri = if (match.value.startsWith("nostr:", ignoreCase = true)) match.value else "nostr:${match.value}"
+        try {
+            val parsed = Nip19Parser.uriToRoute(fullUri) ?: return@forEach
+            val hex = (parsed.entity as? NProfile)?.hex ?: return@forEach
+            if (hex.length == 64) {
+                segments.add(Segment(match.range.first, match.range.last + 1, SEG_NPROFILE, hex))
+            }
+        } catch (_: Exception) { }
+    }
+
     // NIP-19 naddr (addressable events, e.g. communities) – display as readable label, optional click to navigate
     naddrPattern.findAll(content).forEach { match ->
         val fullUri = if (match.value.startsWith("nostr:", ignoreCase = true)) match.value else "nostr:${match.value}"
@@ -120,8 +143,51 @@ fun buildNoteContentAnnotatedString(
         } catch (_: Exception) { }
     }
 
+    // Hashtags in content — highlight with green
+    hashtagPattern.findAll(content).forEach { match ->
+        segments.add(Segment(match.range.first, match.range.last + 1, SEG_HASHTAG, match.value))
+    }
+
+    // Deduplicate overlapping segments: NIP-19 types take priority over generic URLs
+    val nip19Types = setOf(SEG_NPUB, SEG_NEVENT, SEG_NPROFILE, SEG_NADDR, SEG_EMBEDDED_MEDIA)
+    val nip19Ranges = segments.filter { it.type in nip19Types }.map { it.start..it.end }
+    segments.removeAll { seg ->
+        seg.type == SEG_URL && nip19Ranges.any { range -> seg.start >= range.first && seg.end <= range.last }
+    }
+
+    // Expand hidden segments (embedded media + nevent) to consume surrounding whitespace/newlines
+    // so that removing the URL text doesn't leave blank lines or dead space.
+    fun expandToConsumeWhitespace(seg: Segment): Segment {
+        if (seg.type != SEG_EMBEDDED_MEDIA && seg.type != SEG_NEVENT) return seg
+        var newStart = seg.start
+        var newEnd = seg.end
+        // Consume all whitespace (spaces/tabs/newlines) before the URL
+        while (newStart > 0 && content[newStart - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) newStart--
+        // Consume all whitespace (spaces/tabs/newlines) after the URL
+        while (newEnd < content.length && content[newEnd].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) newEnd++
+        // If we consumed everything before, keep start at 0; otherwise restore one newline
+        // so the preceding text block ends cleanly (don't merge two paragraphs)
+        if (newStart > 0) {
+            // Re-add one newline boundary so preceding text doesn't merge with following text
+            newStart = seg.start
+            while (newStart > 0 && content[newStart - 1].let { it == ' ' || it == '\t' }) newStart--
+            if (newStart > 0 && content[newStart - 1] == '\n') newStart-- // eat one leading newline
+        }
+        // Same for trailing: eat all blank lines after, but if there's text after, keep boundary
+        newEnd = seg.end
+        while (newEnd < content.length && content[newEnd].let { it == ' ' || it == '\t' }) newEnd++
+        // Consume all trailing newlines (blank lines after the URL)
+        while (newEnd < content.length && content[newEnd].let { it == '\n' || it == '\r' }) {
+            newEnd++
+            // Also eat whitespace on the next line if it's another blank line
+            while (newEnd < content.length && content[newEnd].let { it == ' ' || it == '\t' }) newEnd++
+        }
+        return Segment(newStart, newEnd, seg.type, seg.data)
+    }
+    val expandedSegments = segments.map { expandToConsumeWhitespace(it) }
+
     val (text, segs) = if (range != null) {
-        val clamped = segments
+        val clamped = expandedSegments
             .filter { it.start < rEnd && it.end > rStart }
             .map { Segment(
                 (it.start - rStart).coerceAtLeast(0),
@@ -132,11 +198,13 @@ fun buildNoteContentAnnotatedString(
             .sortedBy { it.start }
         slice to clamped
     } else {
-        segments.sortBy { it.start }
-        content to segments
+        expandedSegments.sortedBy { it.start }
+        content to expandedSegments.sortedBy { it.start }
     }
 
     var pos = 0
+    val hashtagStyle = SpanStyle(color = androidx.compose.ui.graphics.Color(0xFF8FBC8F)) // SageGreen
+    val mentionStyle = SpanStyle(color = androidx.compose.ui.graphics.Color(0xFF8E30EB), fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold) // Purple (same as OP highlight)
     return buildAnnotatedString {
         for (seg in segs) {
             if (seg.start < pos) continue
@@ -156,11 +224,23 @@ fun buildNoteContentAnnotatedString(
                         "@${author.displayName}"
                     }
                     pushStringAnnotation("PROFILE", hex)
-                    withStyle(linkStyle) { append(label) }
+                    withStyle(mentionStyle) { append(label) }
                     pop()
                 }
                 SEG_NEVENT -> {
                     // Replace with nothing; quoted block is rendered below
+                }
+                SEG_NPROFILE -> {
+                    val hex = seg.data as String
+                    val author = profileCache.resolveAuthor(hex)
+                    val label = if (author.displayName.endsWith("...") || author.displayName == author.username) {
+                        "@${author.id.take(8)}\u2026"
+                    } else {
+                        "@${author.displayName}"
+                    }
+                    pushStringAnnotation("PROFILE", hex)
+                    withStyle(mentionStyle) { append(label) }
+                    pop()
                 }
                 SEG_NADDR -> {
                     val (nostrUri, label, _) = seg.data as Triple<*, *, *>
@@ -170,6 +250,12 @@ fun buildNoteContentAnnotatedString(
                 }
                 SEG_EMBEDDED_MEDIA -> {
                     // Hide URL; embedded media is shown as image/video below content
+                }
+                SEG_HASHTAG -> {
+                    val tag = seg.data as String
+                    pushStringAnnotation("HASHTAG", tag)
+                    withStyle(hashtagStyle) { append(tag) }
+                    pop()
                 }
             }
             pos = seg.end
@@ -182,47 +268,93 @@ fun buildNoteContentAnnotatedString(
 sealed class NoteContentBlock {
     data class Content(val annotated: AnnotatedString) : NoteContentBlock()
     data class Preview(val previewInfo: UrlPreviewInfo) : NoteContentBlock()
+    /** A group of consecutive media URLs (images/videos) to render as an inline album carousel. */
+    data class MediaGroup(val urls: List<String>) : NoteContentBlock()
 }
 
 /**
- * Builds content + preview blocks in order so each URL's HTTP metadata (preview) appears directly beneath that URL.
+ * Builds interleaved content blocks: text, inline URL previews, and media groups.
+ *
+ * Media URLs that appear consecutively in the content (possibly separated only by whitespace/newlines)
+ * are grouped into a single [NoteContentBlock.MediaGroup] so the UI can render them as an album
+ * carousel at the correct position in the text flow.
  */
 fun buildNoteContentWithInlinePreviews(
     content: String,
     mediaUrls: Set<String>,
     urlPreviews: List<UrlPreviewInfo>,
     linkStyle: SpanStyle,
-    profileCache: ProfileMetadataCache
+    profileCache: ProfileMetadataCache,
+    consumedUrls: Set<String> = emptySet()
 ): List<NoteContentBlock> {
-    val urlPositions = UrlDetector.findUrlsWithPositions(content)
+    // Locate every URL with its character position
+    val urlPositions = UrlDetector.findUrlsWithPositions(content) // List<Pair<IntRange, String>>
     val previewByUrl = urlPreviews.associateBy { it.url }
-    val ordered = urlPositions
-        .mapNotNull { (range, url) -> previewByUrl[url]?.let { Triple(range.first, range.last + 1, it) } }
-        .sortedBy { it.first }
-    if (ordered.isEmpty()) {
-        val full = buildNoteContentAnnotatedString(content, mediaUrls, linkStyle, profileCache, null)
+
+    // Build an ordered list of "markers" – each is either a media URL or a link-preview URL at a position
+    data class Marker(val start: Int, val end: Int, val url: String, val isMedia: Boolean, val preview: UrlPreviewInfo?)
+    // consumedUrls are hidden from text (like media) but not rendered as media groups
+    val allHiddenUrls = mediaUrls + consumedUrls
+    val markers = urlPositions.map { (range, url) ->
+        val isMed = url in mediaUrls
+        val isConsumed = url in consumedUrls
+        Marker(range.first, range.last + 1, url, isMed || isConsumed, if (!isMed && !isConsumed) previewByUrl[url] else null)
+    }.sortedBy { it.start }
+
+    if (markers.isEmpty()) {
+        val full = buildNoteContentAnnotatedString(content, allHiddenUrls, linkStyle, profileCache, null)
         return if (full.isNotEmpty()) listOf(NoteContentBlock.Content(full)) else emptyList()
     }
+
+    // Group consecutive media markers (only whitespace/newlines between them) into MediaGroups
     val blocks = mutableListOf<NoteContentBlock>()
-    var lastEnd = 0
-    for ((urlStart, urlEnd, preview) in ordered) {
-        if (lastEnd < urlEnd) {
-            val chunk = buildNoteContentAnnotatedString(
-                content, mediaUrls, linkStyle, profileCache,
-                IntRange(lastEnd, urlEnd - 1)
-            )
-            if (chunk.isNotEmpty()) blocks.add(NoteContentBlock.Content(chunk))
-        }
-        blocks.add(NoteContentBlock.Preview(preview))
-        lastEnd = urlEnd
-    }
-    if (lastEnd < content.length) {
-        val tail = buildNoteContentAnnotatedString(
-            content, mediaUrls, linkStyle, profileCache,
-            IntRange(lastEnd, content.length - 1)
+    var cursor = 0 // current position in content
+
+    fun emitTextBlock(from: Int, to: Int) {
+        if (from >= to) return
+        val chunk = buildNoteContentAnnotatedString(
+            content, allHiddenUrls, linkStyle, profileCache,
+            IntRange(from, to - 1)
         )
-        if (tail.isNotEmpty()) blocks.add(NoteContentBlock.Content(tail))
+        if (chunk.isNotEmpty()) blocks.add(NoteContentBlock.Content(chunk))
     }
+
+    var i = 0
+    while (i < markers.size) {
+        val m = markers[i]
+        if (m.isMedia) {
+            // Start of a potential media group – collect consecutive media markers
+            val groupUrls = mutableListOf<String>()
+            if (m.url !in consumedUrls) groupUrls.add(m.url)
+            var groupEnd = m.end
+            var j = i + 1
+            while (j < markers.size && markers[j].isMedia) {
+                // Check that only whitespace separates this media URL from the previous one
+                val between = content.substring(groupEnd, markers[j].start)
+                if (between.isNotBlank()) break
+                if (markers[j].url !in consumedUrls) groupUrls.add(markers[j].url)
+                groupEnd = markers[j].end
+                j++
+            }
+            // Emit any text before this media group
+            emitTextBlock(cursor, m.start)
+            // Only emit MediaGroup if there are actual media URLs (not just consumed ones)
+            if (groupUrls.isNotEmpty()) blocks.add(NoteContentBlock.MediaGroup(groupUrls))
+            cursor = groupEnd
+            i = j
+        } else if (m.preview != null) {
+            // Link with preview – emit text up to (and including) the URL, then the preview
+            emitTextBlock(cursor, m.end)
+            blocks.add(NoteContentBlock.Preview(m.preview))
+            cursor = m.end
+            i++
+        } else {
+            // Regular URL without preview – just advance past it (text builder handles it)
+            i++
+        }
+    }
+    // Emit any trailing text
+    emitTextBlock(cursor, content.length)
     return blocks
 }
 

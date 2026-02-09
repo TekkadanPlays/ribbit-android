@@ -15,7 +15,7 @@ data class RelayCategory(
     val name: String,
     val relays: List<UserRelay> = emptyList(),
     val isDefault: Boolean = false,
-    val isFavorite: Boolean = false,
+    val isSubscribed: Boolean = true,
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -29,7 +29,7 @@ object DefaultRelayCategories {
             name = "Home relays",
             relays = emptyList(),
             isDefault = true,
-            isFavorite = true
+            isSubscribed = true
         )
     }
 

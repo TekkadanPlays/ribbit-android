@@ -85,7 +85,7 @@ class RelayForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("ribbit is running")
             .setContentText(contentText)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(com.example.views.ribbit.R.drawable.ic_notification_frog)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()

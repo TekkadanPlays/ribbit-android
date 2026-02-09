@@ -17,10 +17,12 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.views.data.UrlPreviewInfo
@@ -45,97 +47,135 @@ fun Kind1LinkEmbedBlock(
     expandDescriptionInThread: Boolean = false,
     inThreadView: Boolean = false,
     onUrlClick: (String) -> Unit = {},
+    onNoteClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val uriHandler = LocalUriHandler.current
 
-    Surface(
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .combinedClickable(
-                onClick = {
-                    onUrlClick(previewInfo.url)
-                    uriHandler.openUri(previewInfo.url)
-                }
-            ),
-        color = Color.Transparent,
-        shape = RoundedCornerShape(12.dp),
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-        border = if (inThreadView) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant) else null
+            .then(if (onNoteClick != null) Modifier.clickable { onNoteClick() } else Modifier)
     ) {
-        Column(
+        // Top section (outside border): image + title + domain
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Header: headline, root domain (no counts)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    if (previewInfo.title.isNotEmpty()) {
-                        Text(
-                            text = previewInfo.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+            Column(modifier = Modifier.weight(1f)) {
+                if (previewInfo.title.isNotEmpty()) {
                     Text(
-                        text = previewInfo.rootDomain,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = previewInfo.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
+                Text(
+                    text = previewInfo.rootDomain,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Box(
+                modifier = Modifier
+                    .size(KIND1_EMBED_THUMBNAIL_DP)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable {
+                        onUrlClick(previewInfo.url)
+                        uriHandler.openUri(previewInfo.url)
+                    },
+                contentAlignment = Alignment.Center
+            ) {
                 if (previewInfo.imageUrl.isNotEmpty()) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(KIND1_EMBED_THUMBNAIL_DP)
-                            .clip(RoundedCornerShape(8.dp))
-                    ) {
+                    var imgFailed by remember(previewInfo.imageUrl) { mutableStateOf(false) }
+                    if (!imgFailed) {
                         AsyncImage(
                             model = previewInfo.imageUrlFullPath,
                             contentDescription = previewInfo.title.ifEmpty { "Link preview" },
                             modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
+                            contentScale = ContentScale.Crop,
+                            onError = { imgFailed = true }
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.OpenInNew,
+                                contentDescription = "Link",
+                                modifier = Modifier.size(24.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.OpenInNew,
+                            contentDescription = "Link",
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
+        }
 
-            // Body: description (1-2 lines in feed, more in thread) + link line
-            if (previewInfo.description.isNotEmpty() || previewInfo.url.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                if (previewInfo.description.isNotEmpty()) {
-                    Text(
-                        text = previewInfo.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = if (expandDescriptionInThread) 6 else 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.OpenInNew,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = previewInfo.rootDomain,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+        // Bottom section (inside border): description + link
+        if (previewInfo.description.isNotEmpty() || previewInfo.url.isNotEmpty()) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 0.dp),
+                color = Color.Transparent,
+                shape = RoundedCornerShape(4.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    if (previewInfo.description.isNotEmpty()) {
+                        Text(
+                            text = previewInfo.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = if (expandDescriptionInThread) 6 else 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clickable {
+                                onUrlClick(previewInfo.url)
+                                uriHandler.openUri(previewInfo.url)
+                            }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.OpenInNew,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = previewInfo.rootDomain,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
         }

@@ -35,7 +35,8 @@ data class TopicNote(
     val hashtags: List<String>,
     val timestamp: Long,
     val replyCount: Int = 0,
-    val relayUrl: String = ""
+    val relayUrl: String = "",
+    val relayUrls: List<String> = emptyList()
 )
 
 /**
@@ -420,6 +421,7 @@ class TopicsRepository private constructor(context: Context) {
             .mapNotNull { tag -> tag.getOrNull(1)?.lowercase() }
             .distinct()
 
+        val relayUrls = relayUrl.split(",").filter { it.isNotBlank() }
         return TopicNote(
             id = event.id,
             author = author,
@@ -428,7 +430,8 @@ class TopicsRepository private constructor(context: Context) {
             hashtags = hashtags,
             timestamp = event.createdAt * 1000L, // Convert to milliseconds
             replyCount = 0, // Will be updated when we fetch Kind 1111 replies
-            relayUrl = relayUrl
+            relayUrl = relayUrls.firstOrNull() ?: relayUrl,
+            relayUrls = relayUrls
         )
     }
 

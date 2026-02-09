@@ -310,8 +310,8 @@ fun RelayManagementScreen(
                                 onExpandToggle = {
                                     categoryExpanded = categoryExpanded + (category.id to !(categoryExpanded[category.id] ?: false))
                                 },
-                                onSetFavorite = { categoryId ->
-                                    viewModel.setFavoriteCategory(categoryId)
+                                onToggleSubscription = { categoryId ->
+                                    viewModel.toggleCategorySubscription(categoryId)
                                 },
                                 onOpenRelayLog = onOpenRelayLog
                             )
@@ -825,8 +825,7 @@ private fun RelayCategorySectionWithAddButton(
                     relay = relay,
                     connectionStatus = RelayConnectionStatus.DISCONNECTED, // TODO: Track connection status per category
                     onOpenRelayLog = onOpenRelayLog,
-                    onRemove = { onRemoveRelay(relay.url) },
-                    onRefresh = { /* TODO: Implement refresh for category relays */ }
+                    onRemove = { onRemoveRelay(relay.url) }
                 )
 
                 // Only add divider if not the last item
@@ -922,8 +921,7 @@ private fun RelayCategorySection(
                     relay = relay,
                     connectionStatus = RelayConnectionStatus.DISCONNECTED, // TODO: Track connection status per category
                     onOpenRelayLog = onOpenRelayLog,
-                    onRemove = { onRemoveRelay(relay.url) },
-                    onRefresh = { /* TODO: Implement refresh for category relays */ }
+                    onRemove = { onRemoveRelay(relay.url) }
                 )
 
                 // Only add divider if not the last item
@@ -944,8 +942,7 @@ private fun RelaySettingsItem(
     relay: UserRelay,
     connectionStatus: RelayConnectionStatus,
     onOpenRelayLog: (String) -> Unit,
-    onRemove: () -> Unit,
-    onRefresh: () -> Unit
+    onRemove: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -1002,30 +999,17 @@ private fun RelaySettingsItem(
             )
         }
 
-        // Action buttons
-        Row {
-            IconButton(
-                onClick = onRefresh,
-                modifier = Modifier.size(40.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Refresh,
-                    contentDescription = "Refresh",
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            IconButton(
-                onClick = onRemove,
-                modifier = Modifier.size(40.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Delete,
-                    contentDescription = "Remove",
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.error
-                )
-            }
+        // Remove button
+        IconButton(
+            onClick = onRemove,
+            modifier = Modifier.size(40.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Delete,
+                contentDescription = "Remove",
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.error
+            )
         }
     }
 }
@@ -1185,11 +1169,12 @@ private fun RelayCategorySection(
     isLoading: Boolean,
     isExpanded: Boolean,
     onExpandToggle: () -> Unit,
-    onSetFavorite: (String) -> Unit,
+    onToggleSubscription: (String) -> Unit,
     onOpenRelayLog: (String) -> Unit = {}
 ) {
+    val isSubscribed = category.isSubscribed
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-        // Category header - tap to expand/collapse
+        // Category header row
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1197,6 +1182,7 @@ private fun RelayCategorySection(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Left: chevron + name
             Row(
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically
@@ -1208,20 +1194,6 @@ private fun RelayCategorySection(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-
-                // Favorite star icon
-                IconButton(
-                    onClick = { onSetFavorite(category.id) },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = if (category.isFavorite) Icons.Default.Star else Icons.Outlined.StarBorder,
-                        contentDescription = if (category.isFavorite) "Favorite" else "Set as favorite",
-                        tint = if (category.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(4.dp))
 
                 // Name with inline editing
                 if (isEditing) {
@@ -1248,13 +1220,38 @@ private fun RelayCategorySection(
                     }
                 } else {
                     Text(
-                        text = "${category.name} (${category.relays.size})",
+                        text = category.name,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = if (isSubscribed) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "(${category.relays.size})",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
 
-                    // Pencil icon after count
+            // Right: subscribe switch
+            Switch(
+                checked = isSubscribed,
+                onCheckedChange = { onToggleSubscription(category.id) },
+                modifier = Modifier.height(24.dp)
+            )
+        }
+
+        // Action row (edit, delete, add) — only when expanded
+        if (isExpanded) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 28.dp, top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // Edit name
+                if (!isEditing) {
                     IconButton(
                         onClick = onStartEditing,
                         modifier = Modifier.size(32.dp)
@@ -1267,36 +1264,33 @@ private fun RelayCategorySection(
                         )
                     }
                 }
-            }
-
-            Row {
-                // Delete button (not for default category)
+                // Delete (not for default)
                 if (!category.isDefault) {
                     IconButton(
                         onClick = onDeleteCategory,
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(32.dp)
                     ) {
                         Icon(
                             Icons.Default.Delete,
                             contentDescription = "Delete",
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.error
                         )
                     }
                 }
-
-                // + / - button - expands category and toggles input
+                Spacer(modifier = Modifier.weight(1f))
+                // Add relay
                 IconButton(
                     onClick = {
-                        if (!isExpanded) onExpandToggle() // Auto-expand if needed
-                        onToggleInput() // Toggle input (will close others)
+                        if (!isExpanded) onExpandToggle()
+                        onToggleInput()
                     },
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
                         imageVector = if (showInput) Icons.Default.Remove else Icons.Default.Add,
-                        contentDescription = if (showInput) "Hide" else "Add",
-                        modifier = Modifier.size(24.dp),
+                        contentDescription = if (showInput) "Hide" else "Add relay",
+                        modifier = Modifier.size(20.dp),
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
@@ -1323,8 +1317,7 @@ private fun RelayCategorySection(
                         relay = relay,
                         connectionStatus = RelayConnectionStatus.DISCONNECTED,
                         onOpenRelayLog = onOpenRelayLog,
-                        onRemove = { onRemoveRelay(relay) },
-                        onRefresh = { }
+                        onRemove = { onRemoveRelay(relay) }
                     )
                     if (index < category.relays.size - 1) {
                         HorizontalDivider(thickness = 1.dp)

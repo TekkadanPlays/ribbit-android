@@ -104,10 +104,13 @@ class RelayManagementViewModel(
      */
     private fun refreshActiveSubscription() {
         val categories = _uiState.value.relayCategories
-        val favorite = categories.firstOrNull { it.isFavorite }
-            ?: categories.firstOrNull { it.isDefault }
-        val relayUrls = favorite?.relays?.map { it.url } ?: return
-        if (relayUrls.isEmpty()) return
+        val subscribedRelayUrls = categories
+            .filter { it.isSubscribed }
+            .flatMap { it.relays }
+            .map { it.url }
+            .distinct()
+        if (subscribedRelayUrls.isEmpty()) return
+        val relayUrls = subscribedRelayUrls
         Log.d("RelayMgmtVM", "Refreshing active subscription with ${relayUrls.size} relays")
         RelayConnectionStateMachine.getInstance().requestFeedChange(relayUrls)
     }
@@ -267,6 +270,8 @@ class RelayManagementViewModel(
             }
         )
         saveToStorage()
+        // Re-apply subscription so the removed relay gets disconnected
+        refreshActiveSubscription()
     }
 
     // Personal relay management methods
@@ -316,14 +321,16 @@ class RelayManagementViewModel(
     }
 
     /**
-     * Set a category as favorite (for home feed)
-     * Only one category can be favorite at a time
+     * Toggle a category's subscription status.
+     * Subscribed categories show in sidebar, connect relays, and are used for feeds.
+     * Unsubscribed categories are dormant.
      */
-    fun setFavoriteCategory(categoryId: String) {
+    fun toggleCategorySubscription(categoryId: String) {
         val currentCategories = _uiState.value.relayCategories
         _uiState.value = _uiState.value.copy(
             relayCategories = currentCategories.map { category ->
-                category.copy(isFavorite = category.id == categoryId)
+                if (category.id == categoryId) category.copy(isSubscribed = !category.isSubscribed)
+                else category
             }
         )
         saveToStorage()
@@ -331,17 +338,20 @@ class RelayManagementViewModel(
     }
 
     /**
-     * Get the favorite category (for home feed)
+     * Get all subscribed categories
      */
-    fun getFavoriteCategory(): RelayCategory? {
-        return _uiState.value.relayCategories.firstOrNull { it.isFavorite }
+    fun getSubscribedCategories(): List<RelayCategory> {
+        return _uiState.value.relayCategories.filter { it.isSubscribed }
     }
 
     /**
-     * Get all relay URLs from the favorite category
+     * Get all relay URLs from subscribed categories
      */
-    fun getFavoriteCategoryRelayUrls(): List<String> {
-        return getFavoriteCategory()?.relays?.map { it.url } ?: emptyList()
+    fun getSubscribedRelayUrls(): List<String> {
+        return getSubscribedCategories()
+            .flatMap { it.relays }
+            .map { it.url }
+            .distinct()
     }
 
     /**

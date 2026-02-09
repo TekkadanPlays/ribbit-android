@@ -88,7 +88,7 @@ fun ExpandingZapMenu(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp, start = 16.dp, end = 16.dp, bottom = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 contentPadding = PaddingValues(horizontal = 0.dp),
                 reverseLayout = true // This makes it right-aligned
@@ -96,7 +96,6 @@ fun ExpandingZapMenu(
                 // Zap amounts - sorted largest to smallest
                 items(zapAmounts.sortedDescending()) { amount ->
                     FilterChip(
-                        modifier = Modifier.padding(horizontal = 4.dp),
                         selected = amount == 1L, // Highlight 1 sat
                         onClick = {
                             onExpandedChange(false)
@@ -133,7 +132,6 @@ fun ExpandingZapMenu(
                 // Edit chip - rightmost position
                 item {
                     FilterChip(
-                        modifier = Modifier.padding(horizontal = 4.dp),
                         selected = false,
                         onClick = {
                             onExpandedChange(false)

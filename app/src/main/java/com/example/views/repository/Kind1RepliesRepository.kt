@@ -304,7 +304,21 @@ class Kind1RepliesRepository {
                     event.sig
                 )
                 val rootId = textNote.root()?.eventId
-                val replyToId = textNote.reply()?.eventId
+                var replyToId = textNote.reply()?.eventId
+
+                // Fallback: root present but no reply — scan e-tags for a parent that
+                // differs from root (same logic as parseThreadRelationship). Many clients
+                // send ["e", rootId, relay, "root"], ["e", parentId, relay] without a
+                // "reply" marker, so Quartz's markedReply() returns null and
+                // unmarkedReply() may also miss it if the tag has 4+ elements.
+                if (rootId != null && replyToId == null) {
+                    val eTags = event.tags.filter { it.size >= 2 && it[0] == "e" }
+                    if (eTags.size >= 2) {
+                        val ids = eTags.map { it[1] }
+                        replyToId = ids.lastOrNull { it != rootId } ?: ids.last()
+                    }
+                }
+
                 return rootId to replyToId
             } catch (e: Exception) {
                 Log.w(TAG, "TextNoteEvent parse failed, using fallback: ${e.message}")

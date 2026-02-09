@@ -56,7 +56,11 @@ data class Author(
     /** Profile website URL. */
     val website: String? = null,
     /** Lightning address (LUD-16) for zaps, e.g. user@walletofsatoshi.com */
-    val lud16: String? = null
+    val lud16: String? = null,
+    /** Profile banner image URL (kind-0). */
+    val banner: String? = null,
+    /** Pronouns (kind-0). */
+    val pronouns: String? = null
 )
 
 @Immutable

@@ -9,10 +9,14 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
@@ -54,6 +58,7 @@ fun ImageContentViewerScreen(
     urls: List<String>,
     initialIndex: Int,
     onBackClick: () -> Unit,
+    onPageChanged: (Int) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     if (urls.isEmpty()) {
@@ -82,11 +87,12 @@ fun ImageContentViewerScreen(
     }
     val scope = rememberCoroutineScope()
 
-    // Reset zoom when swiping to a different page
+    // Reset zoom when swiping to a different page; report page change
     LaunchedEffect(pagerState.currentPage) {
         scale = 1f
         offsetX = 0f
         offsetY = 0f
+        onPageChanged(pagerState.currentPage)
     }
 
     // Consume back gesture so it only closes the viewer and does not pop the underlying screen
@@ -133,6 +139,32 @@ fun ImageContentViewerScreen(
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize()
                 )
+            }
+        }
+
+        // Indicator dots when multiple images
+        if (urls.size > 1) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 24.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                repeat(urls.size) { index ->
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 3.dp)
+                            .size(if (pagerState.currentPage == index) 8.dp else 6.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (pagerState.currentPage == index)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                            )
+                    )
+                }
             }
         }
 

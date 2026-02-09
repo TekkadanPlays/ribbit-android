@@ -150,13 +150,15 @@ class Kind1RepliesViewModel : ViewModel() {
     }
 
     /**
-     * Organize flat list of replies into threaded structure (Amethyst-style: strict root = only
-     * direct-to-root or replyToId==null; never treat "parent not in list" as root, so orphans
-     * appear once their parent is loaded and the tree stays coherent).
+     * Organize flat list of replies into threaded structure.
+     * Direct replies to root and replies with no parent are roots.
+     * Orphan replies (whose replyToId doesn't match any reply in the list) are also
+     * promoted to root level so they remain visible even when the parent wasn't fetched.
      */
     private fun organizeRepliesIntoThreads(replies: List<ThreadReply>): List<ThreadedReply> {
         if (replies.isEmpty()) return emptyList()
         val noteId = _uiState.value.note?.id ?: return emptyList()
+        val replyIds = replies.map { it.id }.toSet()
 
         fun buildThreadedReply(reply: ThreadReply, level: Int = 0): ThreadedReply {
             val children = replies
@@ -166,13 +168,20 @@ class Kind1RepliesViewModel : ViewModel() {
             return ThreadedReply(reply = reply, children = children, level = level)
         }
 
-        // Only direct replies to the thread root are roots. Replies whose parent isn't in the
-        // list are omitted until the parent is fetched (avoids flat "all at parent level").
+        // Roots: direct replies to thread root, replies with no parent, OR orphans whose
+        // parent isn't in the fetched list (so they don't silently disappear).
         val rootReplies = replies
             .filter { reply ->
-                reply.replyToId == noteId || reply.replyToId == null
+                reply.replyToId == noteId ||
+                reply.replyToId == null ||
+                reply.replyToId !in replyIds
             }
-            .map { buildThreadedReply(it) }
+            .map { reply ->
+                val isOrphan = reply.replyToId != null &&
+                    reply.replyToId != noteId &&
+                    reply.replyToId !in replyIds
+                buildThreadedReply(reply).copy(isOrphan = isOrphan)
+            }
 
         return when (_uiState.value.sortOrder) {
             Kind1ReplySortOrder.CHRONOLOGICAL -> rootReplies.sortedBy { it.reply.timestamp }

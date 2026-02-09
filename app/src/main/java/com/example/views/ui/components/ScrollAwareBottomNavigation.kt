@@ -108,8 +108,8 @@ fun ScrollAwareBottomNavigationBar(
                                 )
                                 Badge(
                                     modifier = Modifier.offset(x = 8.dp, y = (-4).dp),
-                                    containerColor = MaterialTheme.colorScheme.error,
-                                    contentColor = MaterialTheme.colorScheme.onError
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
                                 ) {
                                     Text(
                                         text = if (notificationCount > 99) "99+" else notificationCount.toString(),

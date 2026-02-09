@@ -24,6 +24,7 @@ import kotlinx.coroutines.delay
 class SplashActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.example.views.ui.theme.ThemePreferences.init(applicationContext)
         setContent {
             ViewsTheme {
                 SplashScreen {

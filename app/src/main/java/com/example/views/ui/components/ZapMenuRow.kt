@@ -70,14 +70,13 @@ fun ZapMenuRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 8.dp, bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
             contentPadding = PaddingValues(horizontal = 16.dp)
         ) {
                 // Zap amounts - sorted largest to smallest (far left)
                 items(zapAmounts.sortedDescending()) { amount ->
                     FilterChip(
-                        modifier = Modifier.padding(horizontal = 4.dp),
                         selected = amount == 1L, // Highlight 1 sat
                         onClick = {
                             onExpandedChange(false)
@@ -118,7 +117,6 @@ fun ZapMenuRow(
                 // Custom chip - opens custom zap dialog (same as long-press on bolt)
                 item {
                     FilterChip(
-                        modifier = Modifier.padding(horizontal = 4.dp),
                         selected = false,
                         onClick = {
                             onExpandedChange(false)
@@ -142,7 +140,6 @@ fun ZapMenuRow(
                 // Edit chip (far right)
                 item {
                     FilterChip(
-                        modifier = Modifier.padding(horizontal = 4.dp),
                         selected = false,
                         onClick = {
                             onExpandedChange(false)

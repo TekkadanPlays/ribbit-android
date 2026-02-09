@@ -93,6 +93,14 @@ fun AdaptiveHeader(
         }
     }
 
+    // Auto-collapse filter dropdown when header begins to hide from scroll
+    val collapsedFraction = scrollBehavior?.state?.collapsedFraction ?: 0f
+    LaunchedEffect(collapsedFraction) {
+        if (collapsedFraction > 0.05f && feedDropdownExpanded) {
+            feedDropdownExpanded = false
+        }
+    }
+
     val hasFilterSlideOut = !showBackArrow && !isSearchMode &&
         (onFollowingFilterChange != null || onTopicsFollowingFilterChange != null)
 

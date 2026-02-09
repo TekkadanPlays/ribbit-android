@@ -96,9 +96,15 @@ private val ThreadLineColor = SageGreen80
 /** Max indent depth; beyond this show "Read N more replies" and open sub-thread on tap. */
 private const val MAX_THREAD_DEPTH = 4
 
-/** Stable key for a reply so optimistic→real replacement doesn't change list key (avoids UI jump). */
+/** Stable key for a reply so optimistic→real replacement doesn't change list key (avoids UI jump).
+ *  Use the event id when available (unique per nostr event). Only fall back to content-based key
+ *  for optimistic replies whose id is a synthetic UUID (starts with "optimistic-"). */
 private fun logicalReplyKey(reply: ThreadReply): String =
-    "logical:${reply.author.id}:${reply.content}:${reply.replyToId}"
+    if (reply.id.startsWith("optimistic-")) {
+        "logical:${reply.author.id}:${reply.content.take(80)}:${reply.replyToId}"
+    } else {
+        "reply:${reply.id}"
+    }
 
 /** Find a ThreadedReply node by reply id in the tree. */
 private fun findThreadedReplyById(tree: List<ThreadedReply>, id: String): ThreadedReply? =
@@ -193,6 +199,10 @@ fun ModernThreadViewScreen(
     accountNpub: String? = null,
     /** Current user Author for optimistic reply (kind-1111); when set, reply appears immediately. */
     currentUserAuthor: Author? = null,
+    /** Retrieve the shared media album page for a note (from AppViewModel). */
+    mediaPageForNote: (String) -> Int = { 0 },
+    /** Store the media album page when user swipes (to AppViewModel). */
+    onMediaPageChanged: (String, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     var isRefreshing by remember { mutableStateOf(false) }
@@ -428,6 +438,9 @@ fun ModernThreadViewScreen(
                         shouldCloseZapMenus = shouldCloseZapMenus,
                         accountNpub = accountNpub,
                         expandLinkPreviewInThread = true,
+                        showHashtagsSection = false,
+                        initialMediaPage = mediaPageForNote(note.id),
+                        onMediaPageChanged = { page -> onMediaPageChanged(note.id, page) },
                         extraMoreMenuItems = listOf(
                             Pair("Copy text") {
                                 copyTextContent = note.content
@@ -535,84 +548,9 @@ fun ModernThreadViewScreen(
                 }
             }
 
-            // Display replies - check if we have threaded structure or flat list
-            if (replyKind == 1 && repliesState.threadedReplies.isEmpty() && repliesState.replies.isNotEmpty()) {
-                // Kind 1 replies - display as flat list using NoteCard with horizontal divider between each
-                itemsIndexed(
-                    items = repliesState.replies,
-                    key = { _, it -> it.id }
-                ) { index, reply ->
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        // Box ensures the line gets a real height (matchParentSize); Row with fillMaxHeight() child can get 0 in LazyColumn
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onExpandedControlsReplyChange(if (expandedControlsReplyId == reply.id) null else reply.id) }
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.Top
-                            ) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                NoteCard(
-                                note = reply.toNote(),
-                                showActionRow = expandedControlsReplyId == reply.id,
-                                rootAuthorId = note.author.id,
-                                expandLinkPreviewInThread = true,
-                                onLike = { replyId ->
-                                    if (replyKind == 1) {
-                                        kind1RepliesViewModel.likeReply(replyId)
-                                    }
-                                },
-                                onShare = onShare,
-                                onComment = { replyId -> effectiveOnCommentReply(replyId) },
-                                onReact = onReact,
-                                onProfileClick = onProfileClick,
-                                onNoteClick = { /* Already in thread */ },
-                                onImageTap = onImageTap,
-                                onOpenImageViewer = onOpenImageViewer,
-                                onVideoClick = onVideoClick,
-                                onCustomZapSend = onCustomZapSend,
-                                onZap = effectiveOnZap,
-                                isZapInProgress = reply.toNote().id in zapInProgressNoteIds,
-                                isZapped = reply.toNote().id in zappedNoteIds,
-                                myZappedAmount = myZappedAmountByNoteId[reply.toNote().id],
-                                overrideZapCount = noteCountsByNoteId[reply.id]?.zapCount,
-                                overrideReactions = noteCountsByNoteId[reply.id]?.reactions,
-                                onRelayClick = { relayUrlToShowInfo = it },
-                                shouldCloseZapMenus = shouldCloseZapMenus,
-                                accountNpub = accountNpub,
-                                modifier = Modifier.weight(1f)
-                            )
-                            }
-                            // Vertical separator: thin line only; outer Box gets row height so inner fillMaxHeight() works
-                            Box(
-                                modifier = Modifier
-                                    .matchParentSize()
-                                    .align(Alignment.CenterStart)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .width(3.dp)
-                                        .offset(x = 1.5.dp)
-                                        .fillMaxHeight()
-                                        .background(ThreadLineColor, RectangleShape)
-                                )
-                            }
-                        }
-                        if (index < repliesState.replies.size - 1) {
-                            HorizontalDivider(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                thickness = 1.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                            )
-                        }
-                    }
-                }
-            } else {
-                // Threaded structure: left-edge line per card, indent per level. Topics fallback: show replies as level-0 when threadedReplies empty.
+            // Display replies — always use threaded path (wraps flat replies as level-0 when threadedReplies empty).
+            // Avoids structural flip between flat/threaded itemsIndexed which corrupts LazyColumn draws.
+            run {
                 val displayThreaded = if (repliesState.threadedReplies.isNotEmpty()) {
                     repliesState.threadedReplies
                 } else {
@@ -1076,7 +1014,7 @@ private fun ModernCommentCard(
                         // ✅ COMPACT CONTROLS: Right-aligned with consistent spacing
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.End),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             CompactModernButton(
@@ -1303,7 +1241,7 @@ private fun CompactModernButton(
 ) {
     IconButton(
         onClick = onClick,
-        modifier = modifier.size(36.dp).padding(horizontal = 2.dp)
+        modifier = modifier.size(36.dp)
     ) {
         Icon(
             imageVector = icon,
@@ -1382,6 +1320,28 @@ private fun ThreadedReplyCard(
         ) {
             Spacer(modifier = Modifier.width(fixedGutter))
             Column(modifier = Modifier.weight(1f)) {
+        // Show "event not found" indicator for orphan replies whose parent wasn't fetched
+        if (threadedReply.isOrphan) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.LinkOff,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+                Text(
+                    text = "Replying to an event not found",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+        }
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1526,7 +1486,7 @@ private fun ThreadedReplyCard(
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.End),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             CompactModernButton(

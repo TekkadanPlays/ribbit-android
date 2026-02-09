@@ -1,5 +1,6 @@
 package com.example.views.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -16,7 +17,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.views.data.RelayCategory
+import com.example.views.data.RelayConnectionStatus
 import com.example.views.data.UserRelay
+import com.example.views.relay.RelayState
 import com.example.views.viewmodel.FeedState
 import kotlinx.coroutines.launch
 
@@ -27,6 +30,8 @@ fun GlobalSidebar(
     relayCategories: List<RelayCategory> = emptyList(),
     feedState: FeedState = FeedState(),
     selectedDisplayName: String = "All Relays",
+    relayState: RelayState = RelayState.Disconnected,
+    connectionStatus: Map<String, RelayConnectionStatus> = emptyMap(),
     onItemClick: (String) -> Unit,
     onToggleCategory: (String) -> Unit = {},
     onQrClick: () -> Unit = {},
@@ -43,6 +48,8 @@ fun GlobalSidebar(
                     relayCategories = relayCategories,
                     expandedCategories = feedState.expandedCategories,
                     selectedDisplayName = selectedDisplayName,
+                    relayState = relayState,
+                    connectionStatus = connectionStatus,
                     onItemClick = onItemClick,
                     onToggleCategory = onToggleCategory,
                     onQrClick = onQrClick,
@@ -65,6 +72,8 @@ private fun DrawerContent(
     relayCategories: List<RelayCategory>,
     expandedCategories: Set<String>,
     selectedDisplayName: String,
+    relayState: RelayState = RelayState.Disconnected,
+    connectionStatus: Map<String, RelayConnectionStatus> = emptyMap(),
     onItemClick: (String) -> Unit,
     onToggleCategory: (String) -> Unit,
     onQrClick: () -> Unit = {},
@@ -112,6 +121,50 @@ private fun DrawerContent(
                     contentDescription = "My QR code"
                 )
             }
+        }
+
+        // Connection status summary (peek-able)
+        val connectedCount = connectionStatus.values.count { it == RelayConnectionStatus.CONNECTED }
+        val totalRelayCount = relayCategories.flatMap { it.relays }.distinctBy { it.url }.size
+        val connectionText = when (relayState) {
+            is RelayState.Disconnected -> "Disconnected"
+            is RelayState.Connecting -> "Connecting…"
+            is RelayState.Connected -> "Connected"
+            is RelayState.Subscribed -> "Connected"
+            is RelayState.ConnectFailed -> "Connection failed"
+        }
+        val isConnecting = relayState is RelayState.Connecting
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 28.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(
+                        color = when (relayState) {
+                            is RelayState.Connected, is RelayState.Subscribed -> MaterialTheme.colorScheme.primary
+                            is RelayState.Connecting -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                            else -> MaterialTheme.colorScheme.error
+                        },
+                        shape = androidx.compose.foundation.shape.CircleShape
+                    )
+            )
+            if (isConnecting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Text(
+                text = if (connectedCount > 0) "$connectionText · $connectedCount/$totalRelayCount relays" else connectionText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -168,6 +221,7 @@ private fun DrawerContent(
             RelayCategoriesSection(
                 categories = relayCategories,
                 expandedCategories = expandedCategories,
+                connectionStatus = connectionStatus,
                 onCategoryClick = { categoryId ->
                     onItemClick("relay_category:$categoryId")
                     onClose()
@@ -203,6 +257,7 @@ private fun DrawerContent(
 private fun RelayCategoriesSection(
     categories: List<RelayCategory>,
     expandedCategories: Set<String>,
+    connectionStatus: Map<String, RelayConnectionStatus> = emptyMap(),
     onCategoryClick: (String) -> Unit,
     onRelayClick: (String) -> Unit,
     onToggleCategory: (String) -> Unit,
@@ -280,11 +335,12 @@ private fun RelayCategoriesSection(
                                     .padding(start = 48.dp, end = 28.dp, top = 8.dp, bottom = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                val relayConnected = connectionStatus[relay.url] == RelayConnectionStatus.CONNECTED
                                 Icon(
                                     imageVector = Icons.Default.Circle,
-                                    contentDescription = null,
+                                    contentDescription = if (relayConnected) "Connected" else "Disconnected",
                                     modifier = Modifier.size(6.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    tint = if (relayConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Text(
