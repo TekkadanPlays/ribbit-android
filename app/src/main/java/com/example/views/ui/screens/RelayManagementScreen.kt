@@ -322,30 +322,34 @@ fun RelayManagementScreen(
                             )
                         }
 
-                        // "Add New Category" button at bottom
-                        Button(
-                            onClick = {
-                                if (newCategoryName.isBlank()) {
-                                    newCategoryName = "New Category"
-                                }
-                                val newCategory = RelayCategory(
-                                    name = newCategoryName,
-                                    relays = emptyList()
-                                )
-                                viewModel.addCategory(newCategory)
-                                newCategoryName = ""
-                            },
+                        // "Add New Category" button at bottom — compact, not full-width
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp)
+                                .padding(16.dp),
+                            contentAlignment = Alignment.CenterStart
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Add,
-                                contentDescription = "Add Category",
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Add New Category")
+                            OutlinedButton(
+                                onClick = {
+                                    if (newCategoryName.isBlank()) {
+                                        newCategoryName = "New Category"
+                                    }
+                                    val newCategory = RelayCategory(
+                                        name = newCategoryName,
+                                        relays = emptyList()
+                                    )
+                                    viewModel.addCategory(newCategory)
+                                    newCategoryName = ""
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = "Add Category",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Add Category")
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
@@ -1049,11 +1053,26 @@ private fun RelaySettingsItem(
         }
     }
 
-    // Confirmation dialog
+    // Themed confirmation dialog
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Remove Relay?") },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+            icon = {
+                Icon(
+                    imageVector = Icons.Outlined.Delete,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(28.dp)
+                )
+            },
+            title = {
+                Text(
+                    "Remove Relay?",
+                    fontWeight = FontWeight.Bold
+                )
+            },
             text = {
                 Column {
                     Text("Remove ${relay.displayName} from this list?")
@@ -1066,20 +1085,20 @@ private fun RelaySettingsItem(
                 }
             },
             confirmButton = {
-                TextButton(
+                Button(
                     onClick = {
                         showDeleteConfirm = false
                         onRemove()
                     },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
                     )
                 ) {
                     Text("Remove")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
+                OutlinedButton(onClick = { showDeleteConfirm = false }) {
                     Text("Cancel")
                 }
             }
@@ -1174,7 +1193,22 @@ private fun PersonalRelayItem(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Remove Relay?") },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+            icon = {
+                Icon(
+                    imageVector = Icons.Outlined.Delete,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(28.dp)
+                )
+            },
+            title = {
+                Text(
+                    "Remove Relay?",
+                    fontWeight = FontWeight.Bold
+                )
+            },
             text = {
                 Column {
                     Text("Remove ${relay.displayName} from this list?")
@@ -1187,20 +1221,20 @@ private fun PersonalRelayItem(
                 }
             },
             confirmButton = {
-                TextButton(
+                Button(
                     onClick = {
                         showDeleteConfirm = false
                         onRemove()
                     },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
                     )
                 ) {
                     Text("Remove")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
+                OutlinedButton(onClick = { showDeleteConfirm = false }) {
                     Text("Cancel")
                 }
             }
@@ -1439,40 +1473,26 @@ private fun RelayCategorySection(
                 )
             }
 
-            // Action row (edit, delete, add) — only when expanded, all on right side
+            // Action row (edit name, add relay) — only when expanded
             if (isExpanded) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 28.dp, top = 4.dp),
-                    horizontalArrangement = Arrangement.End,
+                        .padding(start = 28.dp, top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Edit name
                     if (!isEditing) {
                         IconButton(
                             onClick = onStartEditing,
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(40.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Edit,
                                 contentDescription = "Edit name",
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier.size(20.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    // Delete (not for default)
-                    if (!category.isDefault) {
-                        IconButton(
-                            onClick = onDeleteCategory,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Delete",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.error
                             )
                         }
                     }
@@ -1482,12 +1502,12 @@ private fun RelayCategorySection(
                             if (!isExpanded) onExpandToggle()
                             onToggleInput()
                         },
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             imageVector = if (showInput) Icons.Default.Remove else Icons.Default.Add,
                             contentDescription = if (showInput) "Hide" else "Add relay",
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(24.dp),
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }

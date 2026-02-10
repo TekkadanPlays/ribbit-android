@@ -85,16 +85,20 @@ class RelayManagementViewModel(
                 cacheRelays = cache
             )
 
-            // Fetch NIP-11 info in background for all personal relays
-            val allPersonalUrls = (outbox + inbox + cache).map { it.url }.distinct()
-            allPersonalUrls.forEach { url ->
+            // Fetch NIP-11 info in background for all relays (personal + category)
+            val allCategoryUrls = categories.flatMap { it.relays }.map { it.url }
+            val allPersonalUrls = (outbox + inbox + cache).map { it.url }
+            val allUrls = (allCategoryUrls + allPersonalUrls).distinct()
+            allUrls.forEach { url ->
                 launch(Dispatchers.IO) {
                     nip11Retriever.loadRelayInfo(
                         relayUrl = url,
                         onInfo = { freshInfo ->
-                            // Update the relay info in whichever list(s) it appears
                             val state = _uiState.value
                             _uiState.value = state.copy(
+                                relayCategories = state.relayCategories.map { cat ->
+                                    cat.copy(relays = cat.relays.updateRelayInfo(url, freshInfo))
+                                },
                                 outboxRelays = state.outboxRelays.updateRelayInfo(url, freshInfo),
                                 inboxRelays = state.inboxRelays.updateRelayInfo(url, freshInfo),
                                 cacheRelays = state.cacheRelays.updateRelayInfo(url, freshInfo)

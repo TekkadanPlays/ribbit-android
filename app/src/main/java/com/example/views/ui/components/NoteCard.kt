@@ -735,7 +735,7 @@ fun NoteCard(
             }
 
             if (showReactionPicker) {
-                ReactionPickerDialog(
+                EmojiPickerDialog(
                     recentEmojis = recentEmojis,
                     onDismiss = { showReactionPicker = false },
                     onEmojiSelected = { emoji ->
@@ -808,7 +808,7 @@ private fun ReactionButton(
 }
 
 /** Returns the first grapheme (code point) of the string, or null if empty/blank. */
-private fun firstGrapheme(s: String): String? {
+internal fun firstGrapheme(s: String): String? {
     val t = s.trim()
     if (t.isEmpty()) return null
     val end = Character.offsetByCodePoints(t, 0, 1).coerceIn(1, t.length)

@@ -1008,8 +1008,16 @@ private fun ModernCommentCard(
 
                 // Optimized controls - only show/hide, no complex animations
                 if (isControlsExpanded) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Spacer(modifier = Modifier.height(12.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .background(
+                                MaterialTheme.colorScheme.surfaceContainerLow,
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                            )
+                            .padding(vertical = 4.dp, horizontal = 4.dp)
+                    ) {
 
                         // ✅ COMPACT CONTROLS: Right-aligned with consistent spacing
                         Row(
@@ -1485,7 +1493,13 @@ private fun ThreadedReplyCard(
                         if (isControlsExpanded) {
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceContainerLow,
+                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                                )
+                                .padding(vertical = 2.dp, horizontal = 4.dp),
                             horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.End),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
