@@ -71,6 +71,16 @@ fun TopicFeedScreen(
     // Get topics for this hashtag
     val topics = uiState.topicsForSelectedHashtag
 
+    // Register topic IDs with NoteCountsRepository for reaction/zap counts
+    val topicIds = remember(topics) { topics.map { it.id }.toSet() }
+    LaunchedEffect(topicIds) {
+        com.example.views.repository.NoteCountsRepository.setTopicNoteIdsOfInterest(topicIds)
+    }
+    DisposableEffect(Unit) {
+        onDispose { com.example.views.repository.NoteCountsRepository.setTopicNoteIdsOfInterest(emptySet()) }
+    }
+    val noteCountsByNoteId by com.example.views.repository.NoteCountsRepository.countsByNoteId.collectAsState()
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
@@ -193,9 +203,12 @@ fun TopicFeedScreen(
                         val kind1ReplyCount = repliesByTopicId[topic.id]?.size ?: 0
                         val totalReplyCount = topic.replyCount + kind1ReplyCount
                         
+                        val counts = noteCountsByNoteId[topic.id]
                         TopicCard(
                             topic = topic.copy(replyCount = totalReplyCount),
                             isFavorited = false, // TODO: Track favorites
+                            reactions = counts?.reactions ?: emptyList(),
+                            zapCount = counts?.zapCount ?: 0,
                             onToggleFavorite = {
                                 // TODO: Implement favorite
                             },
@@ -220,6 +233,8 @@ fun TopicFeedScreen(
 private fun TopicCard(
     topic: TopicNote,
     isFavorited: Boolean,
+    reactions: List<String> = emptyList(),
+    zapCount: Int = 0,
     onToggleFavorite: () -> Unit,
     onMenuClick: () -> Unit,
     onClick: () -> Unit,
@@ -373,22 +388,66 @@ private fun TopicCard(
                     }
                 }
 
-                // Reply count
+                // Counts: reactions, zaps, replies
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Comment,
-                        contentDescription = "Replies",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = topic.replyCount.toString(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    // Reactions
+                    if (reactions.isNotEmpty()) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = reactions.take(3).joinToString(""),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            if (reactions.size > 3) {
+                                Text(
+                                    text = "+${reactions.size - 3}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    // Zap count
+                    if (zapCount > 0) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "⚡",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                text = zapCount.toString(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    // Reply count
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Comment,
+                            contentDescription = "Replies",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = topic.replyCount.toString(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }

@@ -68,7 +68,7 @@ fun SettingsScreen(
                 .padding(paddingValues)
                 .verticalScroll(rememberScrollState())
         ) {
-            SettingsItem(icon = Icons.Outlined.Settings, title = "General", onClick = { /* TODO */ })
+            SettingsItem(icon = Icons.Outlined.Settings, title = "General", onClick = { onNavigateTo("general") })
             SettingsItem(icon = Icons.Outlined.Edit, title = "Appearance", onClick = { onNavigateTo("appearance") })
             SettingsItem(icon = Icons.Outlined.Notifications, title = "Notifications", onClick = { /* TODO */ })
             SettingsItem(icon = Icons.Outlined.Person, title = "Account Preferences", onClick = { onNavigateTo("account_preferences") })
@@ -113,7 +113,6 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.outline,
                     modifier = Modifier.padding(16.dp, 8.dp)
                 )
-                SettingsItem(icon = Icons.Outlined.Person, title = "Following (pubkeys)", onClick = { onNavigateTo("debug_follow_list") })
                 DebugEventStatsCard()
             }
 

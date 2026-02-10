@@ -33,6 +33,8 @@ class RelayManagementViewModel(
     private val storageManager: RelayStorageManager
 ) : ViewModel() {
 
+    private val nip11Retriever by lazy { relayRepository.getNip11Retriever() }
+
     private val _uiState = MutableStateFlow(RelayManagementUiState())
     val uiState: StateFlow<RelayManagementUiState> = _uiState.asStateFlow()
 
@@ -82,6 +84,35 @@ class RelayManagementViewModel(
                 inboxRelays = inbox,
                 cacheRelays = cache
             )
+
+            // Fetch NIP-11 info in background for all personal relays
+            val allPersonalUrls = (outbox + inbox + cache).map { it.url }.distinct()
+            allPersonalUrls.forEach { url ->
+                launch(Dispatchers.IO) {
+                    nip11Retriever.loadRelayInfo(
+                        relayUrl = url,
+                        onInfo = { freshInfo ->
+                            // Update the relay info in whichever list(s) it appears
+                            val state = _uiState.value
+                            _uiState.value = state.copy(
+                                outboxRelays = state.outboxRelays.updateRelayInfo(url, freshInfo),
+                                inboxRelays = state.inboxRelays.updateRelayInfo(url, freshInfo),
+                                cacheRelays = state.cacheRelays.updateRelayInfo(url, freshInfo)
+                            )
+                            saveToStorage()
+                        },
+                        onError = { _, _, _ -> /* ignore — keep existing info */ }
+                    )
+                }
+            }
+        }
+    }
+
+    /** Update NIP-11 info for a relay in a list by URL. */
+    private fun List<UserRelay>.updateRelayInfo(url: String, info: com.example.views.data.RelayInformation): List<UserRelay> {
+        return map { relay ->
+            if (relay.url == url) relay.copy(info = info, isOnline = true, lastChecked = System.currentTimeMillis())
+            else relay
         }
     }
 

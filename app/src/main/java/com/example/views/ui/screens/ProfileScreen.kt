@@ -139,7 +139,7 @@ fun ProfileScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp)
+            contentPadding = PaddingValues(bottom = 80.dp)
         ) {
             // Profile Header
             item {

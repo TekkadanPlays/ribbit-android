@@ -67,6 +67,7 @@ import com.example.views.ui.components.RelayInfoDialog
 import com.example.views.ui.components.ScrollAwareBottomNavigationBar
 import com.example.views.ui.components.ThreadSlideBackBox
 import com.example.views.ui.screens.AboutScreen
+import com.example.views.ui.screens.GeneralSettingsScreen
 import com.example.views.ui.screens.AccountPreferencesScreen
 import com.example.views.ui.screens.AppearanceSettingsScreen
 import com.example.views.ui.screens.ComposeNoteScreen
@@ -1218,11 +1219,11 @@ fun RibbitNavigation(
                             onBackClick = { navController.popBackStack() },
                             onNavigateTo = { screen ->
                                 when (screen) {
+                                    "general" -> navController.navigate("settings/general")
                                     "appearance" -> navController.navigate("settings/appearance")
                                     "account_preferences" ->
                                             navController.navigate("settings/account_preferences")
                                     "about" -> navController.navigate("settings/about")
-                                    "debug_follow_list" -> navController.navigate("debug_follow_list")
                                 }
                             },
                             onBugReportClick = {
@@ -1238,6 +1239,10 @@ fun RibbitNavigation(
                 }
 
                 // Settings sub-screens
+                composable("settings/general") {
+                    GeneralSettingsScreen(onBackClick = { navController.popBackStack() })
+                }
+
                 composable("settings/appearance") {
                     AppearanceSettingsScreen(onBackClick = { navController.popBackStack() })
                 }

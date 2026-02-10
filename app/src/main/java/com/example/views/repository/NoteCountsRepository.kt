@@ -43,6 +43,10 @@ object NoteCountsRepository {
     @Volatile
     private var feedNoteIds: Set<String> = emptySet()
 
+    /** Topic note IDs (kind-11 from TopicFeedScreen). Merged with feed for counts subscription. */
+    @Volatile
+    private var topicNoteIds: Set<String> = emptySet()
+
     /** Thread reply note IDs (from thread view when visible). Merged with feed for counts subscription. */
     @Volatile
     private var threadNoteIds: Set<String> = emptySet()
@@ -80,6 +84,15 @@ object NoteCountsRepository {
         scheduleSubscriptionUpdate()
     }
 
+    /**
+     * Set note IDs from the topic feed (kind-11 topics). Merged with feed and thread IDs
+     * so topic reactions/zaps get counted. Call with empty set when leaving topic feed.
+     */
+    fun setTopicNoteIdsOfInterest(noteIds: Set<String>) {
+        topicNoteIds = noteIds
+        scheduleSubscriptionUpdate()
+    }
+
     private fun scheduleSubscriptionUpdate() {
         debounceJob?.cancel()
         debounceJob = scope.launch {
@@ -93,7 +106,7 @@ object NoteCountsRepository {
      * Replaces any previous counts subscription.
      */
     private fun updateCountsSubscription() {
-        val merged = feedNoteIds + threadNoteIds
+        val merged = feedNoteIds + topicNoteIds + threadNoteIds
         if (merged.isEmpty()) {
             countsHandle?.cancel()
             countsHandle = null
@@ -182,6 +195,7 @@ object NoteCountsRepository {
         countsHandle = null
         debounceJob?.cancel()
         feedNoteIds = emptySet()
+        topicNoteIds = emptySet()
         threadNoteIds = emptySet()
         lastSubscribedNoteIds = emptySet()
         processedEventIds.clear()

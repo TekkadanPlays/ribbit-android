@@ -29,9 +29,11 @@ import com.vitorpamplona.quartz.nip01Core.crypto.KeyPair
 import com.vitorpamplona.quartz.nip01Core.signers.NostrSignerInternal
 import com.vitorpamplona.quartz.nip01Core.hints.EventHintBundle
 import com.vitorpamplona.quartz.nip01Core.relay.normalizer.RelayUrlNormalizer
+import com.vitorpamplona.quartz.nip01Core.signers.EventTemplate
 import com.vitorpamplona.quartz.nip25Reactions.ReactionEvent
 import com.example.views.relay.RelayConnectionStateMachine
 import com.example.views.utils.normalizeAuthorIdForCache
+import com.example.views.utils.ClientTagManager
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.Dispatchers
@@ -572,12 +574,17 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
         val hintBundle = EventHintBundle(targetEvent, relayHint)
         val template = ReactionEvent.build(emoji, hintBundle)
 
-        Log.d("AccountStateViewModel", "sendReaction: template kind=${template.kind}, tags=${template.tags.size}")
+        // Inject NIP-89 client tag if enabled
+        val finalTemplate = if (ClientTagManager.isEnabled(getApplication())) {
+            EventTemplate<ReactionEvent>(template.createdAt, template.kind, template.tags + arrayOf(ClientTagManager.CLIENT_TAG), template.content)
+        } else template
+
+        Log.d("AccountStateViewModel", "sendReaction: template kind=${finalTemplate.kind}, tags=${finalTemplate.tags.size}")
 
         viewModelScope.launch {
             try {
                 Log.d("AccountStateViewModel", "sendReaction: signing...")
-                val signed = signer.sign(template)
+                val signed = signer.sign(finalTemplate)
                 Log.d("AccountStateViewModel", "sendReaction: signed! id=${signed.id.take(8)}, kind=${signed.kind}, sig=${signed.sig.take(8)}...")
 
                 // Validate the signed event
@@ -626,7 +633,9 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
         if (normalized.isEmpty()) return "No valid relays selected"
         viewModelScope.launch {
             try {
-                val template = Event.build(1, content)
+                val template = Event.build(1, content) {
+                    if (ClientTagManager.isEnabled(getApplication())) add(ClientTagManager.CLIENT_TAG)
+                }
                 val signed = signer.sign(template)
                 if (signed.sig.isBlank()) {
                     _toastMessage.value = "Note signing failed"
@@ -658,7 +667,10 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
         if (relaySet.isEmpty()) return "No outbox relays configured"
         viewModelScope.launch {
             try {
-                val template = TopicsPublishService.buildTopicEventTemplate(title, content, hashtags)
+                val rawTemplate = TopicsPublishService.buildTopicEventTemplate(title, content, hashtags)
+                val template = if (ClientTagManager.isEnabled(getApplication())) {
+                    EventTemplate<Event>(rawTemplate.createdAt, rawTemplate.kind, rawTemplate.tags + arrayOf(ClientTagManager.CLIENT_TAG), rawTemplate.content)
+                } else rawTemplate
                 val signed = signer.sign(template)
                 if (signed.sig.isBlank()) {
                     _toastMessage.value = "Topic signing failed"
@@ -695,9 +707,12 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
         if (relaySet.isEmpty()) return "No outbox relays configured"
         viewModelScope.launch {
             try {
-                val template = TopicsPublishService.buildThreadReplyEventTemplate(
+                val rawTemplate = TopicsPublishService.buildThreadReplyEventTemplate(
                     rootThreadId, rootThreadPubkey, parentReplyId, parentReplyPubkey, content
                 )
+                val template = if (ClientTagManager.isEnabled(getApplication())) {
+                    EventTemplate<Event>(rawTemplate.createdAt, rawTemplate.kind, rawTemplate.tags + arrayOf(ClientTagManager.CLIENT_TAG), rawTemplate.content)
+                } else rawTemplate
                 val signed = signer.sign(template)
                 if (signed.sig.isBlank()) {
                     _toastMessage.value = "Reply signing failed"
@@ -1106,6 +1121,8 @@ class AccountStateViewModel(application: Application) : AndroidViewModel(applica
                     add(arrayOf("e", topicId, "", "root"))
                     // Add p tag for topic author
                     add(arrayOf("p", topicAuthorPubkey))
+                    // NIP-89 client tag
+                    if (ClientTagManager.isEnabled(getApplication())) add(ClientTagManager.CLIENT_TAG)
                 }
                 
                 val signed = signer.sign(template)

@@ -742,7 +742,8 @@ private fun RelayCategorySectionWithAddButton(
     onAddRelay: () -> Unit,
     onAddDefault: (() -> Unit)? = null,
     isLoading: Boolean,
-    onOpenRelayLog: (String) -> Unit = {}
+    onOpenRelayLog: (String) -> Unit = {},
+    usePersonalStyle: Boolean = true
 ) {
     val focusManager = LocalFocusManager.current
     Column {
@@ -821,12 +822,21 @@ private fun RelayCategorySectionWithAddButton(
             Spacer(modifier = Modifier.height(12.dp))
 
             relays.forEachIndexed { index, relay ->
-                RelaySettingsItem(
-                    relay = relay,
-                    connectionStatus = RelayConnectionStatus.DISCONNECTED, // TODO: Track connection status per category
-                    onOpenRelayLog = onOpenRelayLog,
-                    onRemove = { onRemoveRelay(relay.url) }
-                )
+                if (usePersonalStyle) {
+                    PersonalRelayItem(
+                        relay = relay,
+                        connectionStatus = RelayConnectionStatus.DISCONNECTED,
+                        onOpenRelayLog = onOpenRelayLog,
+                        onRemove = { onRemoveRelay(relay.url) }
+                    )
+                } else {
+                    RelaySettingsItem(
+                        relay = relay,
+                        connectionStatus = RelayConnectionStatus.DISCONNECTED,
+                        onOpenRelayLog = onOpenRelayLog,
+                        onRemove = { onRemoveRelay(relay.url) }
+                    )
+                }
 
                 // Only add divider if not the last item
                 if (index < relays.size - 1) {
@@ -1077,6 +1087,126 @@ private fun RelaySettingsItem(
     }
 }
 
+
+/**
+ * Relay item for the Personal tab — uses a delete icon button instead of swipe-to-dismiss
+ * to avoid gesture conflict with HorizontalPager (swiping right to go back to General tab).
+ */
+@Composable
+private fun PersonalRelayItem(
+    relay: UserRelay,
+    connectionStatus: RelayConnectionStatus,
+    onOpenRelayLog: (String) -> Unit,
+    onRemove: () -> Unit
+) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    Surface(color = MaterialTheme.colorScheme.surface) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                ) { onOpenRelayLog(relay.url) }
+                .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Relay icon
+            if (relay.info?.icon != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(relay.info.icon)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = "Relay icon",
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Outlined.Router,
+                    contentDescription = null,
+                    tint = when (connectionStatus) {
+                        RelayConnectionStatus.CONNECTED -> MaterialTheme.colorScheme.primary
+                        RelayConnectionStatus.CONNECTING -> MaterialTheme.colorScheme.secondary
+                        RelayConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
+                        RelayConnectionStatus.ERROR -> MaterialTheme.colorScheme.error
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = relay.displayName,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = relay.url,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            IconButton(onClick = { showDeleteConfirm = true }) {
+                Icon(
+                    imageVector = Icons.Outlined.Delete,
+                    contentDescription = "Remove relay",
+                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Remove Relay?") },
+            text = {
+                Column {
+                    Text("Remove ${relay.displayName} from this list?")
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = relay.url,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onRemove()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Remove")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
 
 @Composable
 private fun RelayInfoTray(
