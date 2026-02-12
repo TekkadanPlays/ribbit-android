@@ -12,6 +12,7 @@ import com.example.views.utils.normalizeAuthorIdForCache
 import com.example.views.relay.TemporarySubscriptionHandle
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,7 +45,7 @@ object NotificationsRepository {
     private const val PREFS_NAME = "notifications_seen"
     private const val PREFS_KEY_SEEN_IDS = "seen_ids"
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, t -> Log.e(TAG, "Coroutine failed: ${t.message}", t) })
     private val profileCache = ProfileMetadataCache.getInstance()
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -60,6 +61,7 @@ object NotificationsRepository {
 
     private val notificationsById = ConcurrentHashMap<String, NotificationData>()
     private var notificationsHandle: TemporarySubscriptionHandle? = null
+    private var threadRepliesHandle: TemporarySubscriptionHandle? = null
     private var cacheRelayUrls = listOf<String>()
     private var subscriptionRelayUrls = listOf<String>()
     /** Current user hex pubkey (p-tag); used to filter kind-7 so we only show reactions to our notes. */
@@ -102,6 +104,25 @@ object NotificationsRepository {
         persistSeenIds()
     }
 
+    /** Mark all notifications of a specific type as seen (e.g. when user switches to that tab). */
+    fun markAsSeenByType(type: NotificationType) {
+        val idsForType = _notifications.value.filter { it.type == type }.map { it.id }.toSet()
+        if (idsForType.isNotEmpty()) {
+            _seenIds.value = _seenIds.value + idsForType
+            persistSeenIds()
+        }
+    }
+
+    /** Trim seen IDs to only include IDs that still exist in the current notification list (prevents unbounded growth). */
+    private fun trimSeenIds() {
+        val currentIds = _notifications.value.mapTo(mutableSetOf()) { it.id }
+        val trimmed = _seenIds.value.intersect(currentIds)
+        if (trimmed.size != _seenIds.value.size) {
+            _seenIds.value = trimmed
+            persistSeenIds()
+        }
+    }
+
     /**
      * Start subscription for the given user; events with "p" tag = pubkey (replies, likes, reposts, zaps). No follows.
      */
@@ -110,9 +131,23 @@ object NotificationsRepository {
             Log.w(TAG, "startSubscription: empty relays or pubkey")
             return
         }
+        // Same user + active handle = already subscribed, skip restart
+        if (myPubkeyHex == pubkey && notificationsHandle != null) {
+            Log.d(TAG, "startSubscription: already active for ${pubkey.take(8)}..., skipping")
+            return
+        }
+        val isNewUser = myPubkeyHex != pubkey
         stopSubscription()
-        notificationsById.clear()
-        _notifications.value = emptyList()
+        // Only clear notification data when switching users, not when re-subscribing for the same user
+        // This preserves seen state and existing notifications across navigation
+        if (isNewUser) {
+            notificationsById.clear()
+            likeByTargetId.clear()
+            likeEmojiByTargetId.clear()
+            repostByTargetId.clear()
+            zapByTargetId.clear()
+            _notifications.value = emptyList()
+        }
         subscriptionRelayUrls = relayUrls
         myPubkeyHex = pubkey
         val since = (System.currentTimeMillis() / 1000) - ONE_WEEK_SEC
@@ -125,12 +160,36 @@ object NotificationsRepository {
         val stateMachine = RelayConnectionStateMachine.getInstance()
         notificationsHandle = stateMachine.requestTemporarySubscription(relayUrls, filter) { event -> handleEvent(event) }
         Log.d(TAG, "Notifications subscription started for ${pubkey.take(8)}... on ${relayUrls.size} relays")
+
+        // Second subscription: fetch user's kind-11 topic IDs, then subscribe for kind-1111 replies
+        // to those topics. This catches replies that don't p-tag the topic author.
+        scope.launch {
+            val topicIds = fetchUserTopicIds(pubkey, relayUrls, since)
+            if (topicIds.isNotEmpty()) {
+                Log.d(TAG, "Found ${topicIds.size} user topics, subscribing for kind-1111 replies")
+                val threadFilter = Filter(
+                    kinds = listOf(NOTIFICATION_KIND_TOPIC_REPLY),
+                    tags = mapOf("E" to topicIds),
+                    since = since,
+                    limit = 200
+                )
+                threadRepliesHandle = stateMachine.requestTemporarySubscription(relayUrls, threadFilter) { event ->
+                    handleEvent(event)
+                }
+            } else {
+                Log.d(TAG, "No user topics found, skipping thread replies subscription")
+            }
+        }
     }
 
     fun stopSubscription() {
         try {
             notificationsHandle?.cancel()
             notificationsHandle = null
+        } catch (_: Exception) { }
+        try {
+            threadRepliesHandle?.cancel()
+            threadRepliesHandle = null
         } catch (_: Exception) { }
         Log.d(TAG, "Notifications subscription stopped")
     }
@@ -435,6 +494,29 @@ object NotificationsRepository {
         }
     }
 
+    /**
+     * Fetch the user's kind-11 topic event IDs from relays so we can subscribe for kind-1111 replies.
+     */
+    private suspend fun fetchUserTopicIds(pubkey: String, relayUrls: List<String>, since: Long): List<String> {
+        val topicIds = mutableListOf<String>()
+        val stateMachine = RelayConnectionStateMachine.getInstance()
+        val filter = Filter(
+            kinds = listOf(11),
+            authors = listOf(pubkey),
+            since = since,
+            limit = 100
+        )
+        val handle = stateMachine.requestTemporarySubscription(relayUrls, filter) { ev ->
+            if (ev.kind == 11) {
+                synchronized(topicIds) { topicIds.add(ev.id) }
+            }
+        }
+        delay(3000)
+        handle.cancel()
+        Log.d(TAG, "fetchUserTopicIds: found ${topicIds.size} topics for ${pubkey.take(8)}...")
+        return topicIds.distinct()
+    }
+
     /** Build human-readable actor text like "Alice liked your post" or "Alice, Bob, and 3 others liked your post". */
     private fun buildActorText(actorPubkeys: List<String>, action: String): String {
         val names = actorPubkeys.take(2).map { pk ->
@@ -476,8 +558,10 @@ object NotificationsRepository {
                     return
                 }
             }
-            // Kind-1 (reply): only show if the note being replied to (root) was authored by the current user
-            if (current.type == NotificationType.REPLY && myPubkeyHex != null) {
+            // Kind-1 (reply): only show if the note being replied to (root) was authored by the current user.
+            // This check applies only to kind-1 replies; kind-1111 topic replies are handled by the
+            // reclassification logic below (Threads vs Comments).
+            if (current.type == NotificationType.REPLY && current.replyKind == NOTIFICATION_KIND_TEXT && myPubkeyHex != null) {
                 val rootAuthorHex = normalizeAuthorIdForCache(note.author.id)
                 if (rootAuthorHex != myPubkeyHex) {
                     notificationsById.remove(notificationId)
@@ -485,7 +569,16 @@ object NotificationsRepository {
                     return
                 }
             }
-            notificationsById[notificationId] = update(current)(note)
+            // Reclassify kind-1111 replies: if root is a kind-11 topic authored by the current user,
+            // set replyKind=11 so it routes to the "Threads" tab; otherwise keep 1111 for "Comments".
+            var updated = update(current)(note)
+            if (current.replyKind == NOTIFICATION_KIND_TOPIC_REPLY && note.kind == 11 && myPubkeyHex != null) {
+                val rootAuthorHex = normalizeAuthorIdForCache(note.author.id)
+                if (rootAuthorHex == myPubkeyHex) {
+                    updated = updated.copy(replyKind = 11, text = "${current.author?.displayName ?: "Someone"} replied to your thread")
+                }
+            }
+            notificationsById[notificationId] = updated
             emitSorted()
         }
     }
@@ -497,6 +590,10 @@ object NotificationsRepository {
             .mapNotNull { it.getOrNull(1) }
         // Resolve nostr:npub1... mentions to @displayName for cleaner notification previews
         val resolvedContent = resolveNpubMentions(event.content)
+        val mediaUrls = com.example.views.utils.UrlDetector.findUrls(event.content)
+            .filter { com.example.views.utils.UrlDetector.isImageUrl(it) || com.example.views.utils.UrlDetector.isVideoUrl(it) }
+            .distinct()
+        val quotedEventIds = com.example.views.utils.Nip19QuoteParser.extractQuotedEventIds(event.content)
         return Note(
             id = event.id,
             author = author,
@@ -507,8 +604,10 @@ object NotificationsRepository {
             comments = 0,
             isLiked = false,
             hashtags = hashtags,
-            mediaUrls = emptyList(),
-            isReply = false
+            mediaUrls = mediaUrls,
+            quotedEventIds = quotedEventIds,
+            isReply = false,
+            kind = event.kind
         )
     }
 

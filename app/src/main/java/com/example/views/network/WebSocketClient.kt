@@ -16,6 +16,7 @@ class WebSocketClient {
         install(WebSockets)
     }
     
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var webSocketSession: DefaultWebSocketSession? = null
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -36,7 +37,7 @@ class WebSocketClient {
             _isConnected.value = true
             
             // Start listening for messages
-            CoroutineScope(Dispatchers.IO).launch {
+            scope.launch {
                 listenForMessages()
             }
         } catch (e: Exception) {
@@ -53,18 +54,16 @@ class WebSocketClient {
         // For now, we'll use sample data
     }
     
-    private fun CoroutineScope.listenForMessages() {
-        launch {
-            try {
-                webSocketSession?.incoming?.consumeAsFlow()?.collect { frame ->
-                    if (frame is Frame.Text) {
-                        val message = json.decodeFromString<WebSocketMessage>(frame.readText())
-                        handleMessage(message)
-                    }
+    private suspend fun listenForMessages() {
+        try {
+            webSocketSession?.incoming?.consumeAsFlow()?.collect { frame ->
+                if (frame is Frame.Text) {
+                    val message = json.decodeFromString<WebSocketMessage>(frame.readText())
+                    handleMessage(message)
                 }
-            } catch (e: Exception) {
-                _isConnected.value = false
             }
+        } catch (e: Exception) {
+            _isConnected.value = false
         }
     }
     
@@ -124,6 +123,7 @@ class WebSocketClient {
     }
     
     fun cleanup() {
+        scope.cancel()
         client.close()
     }
 }

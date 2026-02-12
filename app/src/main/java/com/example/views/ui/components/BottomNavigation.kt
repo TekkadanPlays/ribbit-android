@@ -48,8 +48,8 @@ fun BottomNavigationBar(
 
 enum class BottomNavDestinations(val route: String, val label: String, val icon: ImageVector) {
     HOME("home", "Home", Icons.Default.Home),
-    TOPICS("topics", "Topics", Icons.Default.Tag),
+    MESSAGES("messages", "DMs", Icons.Default.Email),
+    WALLET("wallet", "Wallet", Icons.Filled.AccountBalanceWallet),
     RELAYS("relays", "Relays", Icons.Outlined.Language),
-    NOTIFICATIONS("notifications", "Notifications", Icons.Default.Notifications),
-    PROFILE("profile", "Profile", Icons.Outlined.Person)
+    ALERTS("notifications", "Alerts", Icons.Default.Notifications)
 }

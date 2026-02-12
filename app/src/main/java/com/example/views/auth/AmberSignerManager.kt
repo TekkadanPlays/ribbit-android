@@ -53,7 +53,7 @@ class AmberSignerManager(private val context: Context) {
         val DEFAULT_PERMISSIONS = listOf<Permission>(
             Permission(
                 type = CommandType.SIGN_EVENT,
-                kind = 1 // Text notes
+                kind = 1 // Text notes (NIP-01)
             ),
             Permission(
                 type = CommandType.SIGN_EVENT,
@@ -65,7 +65,31 @@ class AmberSignerManager(private val context: Context) {
             ),
             Permission(
                 type = CommandType.SIGN_EVENT,
+                kind = 11 // Topics (NIP-22 anchored)
+            ),
+            Permission(
+                type = CommandType.SIGN_EVENT,
+                kind = 1011 // Scoped moderation (NIP-22)
+            ),
+            Permission(
+                type = CommandType.SIGN_EVENT,
+                kind = 1111 // Thread replies (NIP-22)
+            ),
+            Permission(
+                type = CommandType.SIGN_EVENT,
+                kind = 1311 // Live chat messages (NIP-53)
+            ),
+            Permission(
+                type = CommandType.SIGN_EVENT,
+                kind = 9735 // Zap receipts
+            ),
+            Permission(
+                type = CommandType.SIGN_EVENT,
                 kind = 22242 // NIP-42 auth events
+            ),
+            Permission(
+                type = CommandType.SIGN_EVENT,
+                kind = 30073 // Anchor subscriptions
             ),
             Permission(
                 type = CommandType.NIP04_ENCRYPT

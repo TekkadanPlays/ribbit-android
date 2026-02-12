@@ -10,6 +10,7 @@ import com.example.views.utils.UrlDetector
 import com.example.views.utils.extractPubkeysFromContent
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
 import com.vitorpamplona.quartz.nip01Core.core.Event
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,7 +33,7 @@ import kotlinx.coroutines.launch
  */
 class ThreadRepliesRepository {
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, t -> Log.e(TAG, "Coroutine failed: ${t.message}", t) })
     private val relayStateMachine = RelayConnectionStateMachine.getInstance()
 
     // Replies for a specific note ID
@@ -100,15 +101,25 @@ class ThreadRepliesRepository {
             return
         }
 
+        // Cancel ALL active subscriptions first to stop stale events from arriving
+        activeSubscriptions.values.forEach { it.cancel() }
+        activeSubscriptions.clear()
+
         _isLoading.value = true
         _error.value = null
 
+        // Clear all other notes from the replies map so only the current thread is tracked.
+        // This prevents stale replies from lingering when navigating between threads.
+        val staleKeys = _replies.value.keys.filter { it != noteId }
+        if (staleKeys.isNotEmpty()) {
+            _replies.value = _replies.value - staleKeys.toSet()
+        }
+        // Emit an empty entry so the ViewModel collector fires and clears stale UI
+        if (noteId !in _replies.value) {
+            _replies.value = _replies.value + (noteId to emptyList())
+        }
+
         try {
-            // Cancel previous subscriptions for this note if exists
-            activeSubscriptions[noteId]?.cancel()
-            activeSubscriptions.remove(noteId)
-            activeSubscriptions["$noteId:root"]?.cancel()
-            activeSubscriptions.remove("$noteId:root")
 
             Log.d(TAG, "Fetching kind 1111 replies for note ${noteId.take(8)}... from ${targetRelays.size} relays (shared client)")
 

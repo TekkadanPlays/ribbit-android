@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 @Immutable
@@ -81,18 +82,18 @@ class DashboardViewModel : ViewModel() {
         val stateMachine = RelayConnectionStateMachine.getInstance()
         viewModelScope.launch {
             stateMachine.state.collect { state ->
-                _uiState.value = _uiState.value.copy(relayState = state)
+                _uiState.update { it.copy(relayState = state) }
             }
         }
         viewModelScope.launch {
             stateMachine.perRelayState.collect { perRelay ->
                 val total = perRelay.size
                 if (total <= 1) {
-                    _uiState.value = _uiState.value.copy(relayCountSummary = null)
+                    _uiState.update { it.copy(relayCountSummary = null) }
                     return@collect
                 }
                 val connected = perRelay.values.count { it == RelayEndpointStatus.Connected }
-                _uiState.value = _uiState.value.copy(relayCountSummary = "$connected/$total relays")
+                _uiState.update { it.copy(relayCountSummary = "$connected/$total relays") }
             }
         }
     }
@@ -113,11 +114,11 @@ class DashboardViewModel : ViewModel() {
         viewModelScope.launch {
             val cached = ContactListRepository.getCachedFollowList(pubkey)
             if (cached != null && !forceRefresh) {
-                _uiState.value = _uiState.value.copy(followList = cached)
+                _uiState.update { it.copy(followList = cached) }
                 return@launch
             }
             val list = ContactListRepository.fetchFollowList(pubkey, cacheRelayUrls, forceRefresh)
-            _uiState.value = _uiState.value.copy(followList = list)
+            _uiState.update { it.copy(followList = list) }
         }
     }
 
@@ -132,11 +133,9 @@ class DashboardViewModel : ViewModel() {
     }
 
     private fun loadInitialData() {
-        _uiState.value = _uiState.value.copy(
-            notes = emptyList(),
-            isLoading = false,
-            hasRelays = false
-        )
+        _uiState.update {
+            it.copy(notes = emptyList(), isLoading = false, hasRelays = false)
+        }
     }
 
     /** Debounced enrichment job: only one runs at a time, after list stabilizes, so UI stays fast. */
@@ -144,33 +143,20 @@ class DashboardViewModel : ViewModel() {
 
     /**
      * Observe notes from the NotesRepository; emit immediately for fast render; enrich with URL previews after list stabilizes.
+     * Enrichment is triggered from displayedNotes (debounced at 150ms) so profile batch updates don't cancel it.
      */
     private fun observeNotesFromRepository() {
+        // Fast path: push notes to UI immediately
         viewModelScope.launch {
             try {
                 notesRepository.notes.collect { notes ->
                     try {
-                        _uiState.value = _uiState.value.copy(
-                            notes = notes,
-                            isLoadingFromRelays = false,
-                            hasRelays = notes.isNotEmpty() || _uiState.value.hasRelays
-                        )
-                        if (notes.isEmpty()) return@collect
-                        enrichmentJob?.cancel()
-                        enrichmentJob = viewModelScope.launch {
-                            try {
-                                delay(250)
-                                val snapshot = notes.map { it.id }
-                                val enriched = withContext(Dispatchers.IO) {
-                                    urlPreviewManager.processNotesForUrlPreviews(notes)
-                                }
-                                if (_uiState.value.notes.map { it.id } == snapshot) {
-                                    val previewsByNoteId = enriched.associate { it.id to it.urlPreviews }
-                                    _uiState.value = _uiState.value.copy(urlPreviewsByNoteId = previewsByNoteId)
-                                }
-                            } catch (e: Throwable) {
-                                Log.e(TAG, "Enrichment failed: ${e.message}", e)
-                            }
+                        _uiState.update {
+                            it.copy(
+                                notes = notes,
+                                isLoadingFromRelays = false,
+                                hasRelays = notes.isNotEmpty() || it.hasRelays
+                            )
                         }
                     } catch (e: Throwable) {
                         Log.e(TAG, "Notes collect failed: ${e.message}", e)
@@ -181,10 +167,40 @@ class DashboardViewModel : ViewModel() {
             }
         }
 
+        // Enrichment: triggered from displayedNotes which is already debounced (150ms).
+        // This prevents profile batch updates from cancelling enrichment repeatedly.
+        viewModelScope.launch {
+            try {
+                notesRepository.displayedNotes.collect { displayed ->
+                    if (displayed.isEmpty()) return@collect
+                    enrichmentJob?.cancel()
+                    enrichmentJob = viewModelScope.launch {
+                        try {
+                            delay(800)
+                            val snapshot = displayed.map { it.id }
+                            val enriched = withContext(Dispatchers.IO) {
+                                urlPreviewManager.processNotesForUrlPreviews(displayed)
+                            }
+                            if (_uiState.value.notes.map { it.id }.take(snapshot.size) == snapshot) {
+                                val previewsByNoteId = enriched.associate { it.id to it.urlPreviews }
+                                _uiState.update { it.copy(urlPreviewsByNoteId = previewsByNoteId) }
+                            }
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            // Normal: enrichment cancelled by newer emission — not an error
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "Enrichment failed: ${e.message}", e)
+                        }
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "Enrichment flow failed: ${e.message}", e)
+            }
+        }
+
         viewModelScope.launch {
             try {
                 notesRepository.isLoading.collect { isLoading ->
-                    _uiState.value = _uiState.value.copy(isLoadingFromRelays = isLoading)
+                    _uiState.update { it.copy(isLoadingFromRelays = isLoading) }
                 }
             } catch (e: Throwable) {
                 Log.e(TAG, "Loading flow failed: ${e.message}", e)
@@ -195,7 +211,7 @@ class DashboardViewModel : ViewModel() {
             try {
                 notesRepository.error.collect { error ->
                     if (error != null) {
-                        _uiState.value = _uiState.value.copy(error = error)
+                        _uiState.update { it.copy(error = error) }
                     }
                 }
             } catch (e: Throwable) {
@@ -206,10 +222,9 @@ class DashboardViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 notesRepository.newNotesCounts.collect { counts ->
-                    _uiState.value = _uiState.value.copy(
-                        newNotesCountAll = counts.all,
-                        newNotesCountFollowing = counts.following
-                    )
+                    _uiState.update {
+                        it.copy(newNotesCountAll = counts.all, newNotesCountFollowing = counts.following)
+                    }
                 }
             } catch (e: Throwable) {
                 Log.e(TAG, "NewNotesCounts flow failed: ${e.message}", e)
@@ -236,16 +251,14 @@ class DashboardViewModel : ViewModel() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "WebSocket connection error: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(
-                    error = "Connection error: ${e.message}"
-                )
+                _uiState.update { it.copy(error = "Connection error: ${e.message}") }
             }
         }
     }
 
     private fun handleRealTimeUpdate(update: NoteUpdate) {
-        _uiState.value = _uiState.value.copy(
-            notes = _uiState.value.notes.map { note ->
+        _uiState.update { state -> state.copy(
+            notes = state.notes.map { note ->
                 if (note.id == update.noteId) {
                     when (update.action) {
                         "like" -> note.copy(likes = note.likes + 1, isLiked = true)
@@ -257,15 +270,15 @@ class DashboardViewModel : ViewModel() {
                     note
                 }
             }
-        )
+        ) }
     }
 
     fun toggleLike(noteId: String) {
         viewModelScope.launch {
             var isLikedAction = false
 
-            _uiState.value = _uiState.value.copy(
-                notes = _uiState.value.notes.map { note ->
+            _uiState.update { state -> state.copy(
+                notes = state.notes.map { note ->
                     if (note.id == noteId) {
                         val updatedNote = if (note.isLiked) {
                             note.copy(likes = note.likes - 1, isLiked = false)
@@ -278,7 +291,7 @@ class DashboardViewModel : ViewModel() {
                         note
                     }
                 }
-            )
+            ) }
 
             // Send update via WebSocket
             val update = NoteUpdate(
@@ -293,15 +306,15 @@ class DashboardViewModel : ViewModel() {
 
     fun shareNote(noteId: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                notes = _uiState.value.notes.map { note ->
+            _uiState.update { state -> state.copy(
+                notes = state.notes.map { note ->
                     if (note.id == noteId) {
                         note.copy(shares = note.shares + 1, isShared = true)
                     } else {
                         note
                     }
                 }
-            )
+            ) }
 
             val update = NoteUpdate(
                 noteId = noteId,
@@ -315,15 +328,15 @@ class DashboardViewModel : ViewModel() {
 
     fun commentOnNote(noteId: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                notes = _uiState.value.notes.map { note ->
+            _uiState.update { state -> state.copy(
+                notes = state.notes.map { note ->
                     if (note.id == noteId) {
                         note.copy(comments = note.comments + 1)
                     } else {
                         note
                     }
                 }
-            )
+            ) }
         }
     }
 
@@ -361,9 +374,7 @@ class DashboardViewModel : ViewModel() {
     }
 
     fun navigateToDestination(destination: String) {
-        _uiState.value = _uiState.value.copy(
-            currentDestination = destination
-        )
+        _uiState.update { it.copy(currentDestination = destination) }
     }
 
     /**
@@ -373,38 +384,38 @@ class DashboardViewModel : ViewModel() {
         loadNotesFromFavoriteCategory(allUserRelayUrls, allUserRelayUrls)
     }
 
+    /** Debounce job for loadNotesFromFavoriteCategory so rapid LaunchedEffect re-fires collapse into one call. */
+    private var loadNotesJob: Job? = null
+    private val LOAD_NOTES_DEBOUNCE_MS = 300L
+
     /**
      * Set subscription to all user relays and display filter to sidebar selection.
      * Call on first load / when categories change. allUserRelayUrls = all relays we stay connected to; displayUrls = what to show (sidebar selection).
+     * Debounced: rapid calls within 300ms collapse into a single subscription to avoid triple-fire on startup.
      */
     fun loadNotesFromFavoriteCategory(allUserRelayUrls: List<String>, displayUrls: List<String>) {
         if (allUserRelayUrls.isEmpty()) {
             Log.d(TAG, "No relays configured for favorite category")
-            _uiState.value = _uiState.value.copy(
-                notes = emptyList(),
-                hasRelays = false,
-                isLoadingFromRelays = false
-            )
+            _uiState.update { it.copy(notes = emptyList(), hasRelays = false, isLoadingFromRelays = false) }
             return
         }
 
-        Log.d(TAG, "Loading notes: subscription=${allUserRelayUrls.size} relays, display=${displayUrls.size} relay(s)")
-        _uiState.value = _uiState.value.copy(
-            hasRelays = true,
-            isLoadingFromRelays = true
-        )
+        // Apply display filter immediately (cheap, no subscription change)
         notesRepository.connectToRelays(if (displayUrls.isEmpty()) allUserRelayUrls else displayUrls)
+        _uiState.update { it.copy(hasRelays = true) }
 
-        viewModelScope.launch {
+        // Debounce the expensive subscription call
+        loadNotesJob?.cancel()
+        loadNotesJob = viewModelScope.launch {
+            delay(LOAD_NOTES_DEBOUNCE_MS)
+            Log.d(TAG, "Loading notes: subscription=${allUserRelayUrls.size} relays, display=${displayUrls.size} relay(s)")
+            _uiState.update { it.copy(isLoadingFromRelays = true) }
             try {
                 notesRepository.ensureSubscriptionToNotes(allUserRelayUrls, limit = 100)
-                _uiState.value = _uiState.value.copy(isLoadingFromRelays = false)
+                _uiState.update { it.copy(isLoadingFromRelays = false) }
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading notes from relays: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(
-                    error = "Failed to load notes: ${e.message}",
-                    isLoadingFromRelays = false
-                )
+                _uiState.update { it.copy(error = "Failed to load notes: ${e.message}", isLoadingFromRelays = false) }
             }
         }
     }

@@ -98,13 +98,13 @@ class MainActivity : ComponentActivity(), ComponentCallbacks2 {
             )
         }
 
+        // Standard edge-to-edge: system bars visible, content draws behind them
         enableEdgeToEdge()
-        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = false
 
         // Register for memory trim callbacks so we can release caches when UI is hidden or system is under pressure
         registerComponentCallbacks(this)
 
-        // Configure Coil with GIF decoder so animated GIFs render properly in feeds
+        // Configure Coil with GIF decoder, optimized caching, and crossfade for smooth feed rendering
         Coil.setImageLoader(
             ImageLoader.Builder(this)
                 .components {
@@ -114,9 +114,25 @@ class MainActivity : ComponentActivity(), ComponentCallbacks2 {
                         add(GifDecoder.Factory())
                     }
                 }
-                .crossfade(true)
+                .crossfade(200)
+                .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                .memoryCache {
+                    coil.memory.MemoryCache.Builder(this)
+                        .maxSizePercent(0.25) // 25% of available app memory
+                        .build()
+                }
+                .diskCache {
+                    coil.disk.DiskCache.Builder()
+                        .directory(cacheDir.resolve("image_cache"))
+                        .maxSizeBytes(50L * 1024 * 1024) // 50 MB disk cache
+                        .build()
+                }
                 .build()
         )
+
+        // Initialize relay health tracker (loads persisted blocklist before any connections)
+        com.example.views.relay.RelayHealthTracker.init(applicationContext)
 
         // Persist profile cache so avatars/display names survive process death; restore before feed
         ProfileMetadataCache.getInstance().init(applicationContext)
@@ -140,9 +156,19 @@ class MainActivity : ComponentActivity(), ComponentCallbacks2 {
         networkMonitor = NetworkConnectivityMonitor(applicationContext).also { it.start() }
 
         // Re-apply relay subscription when app is resumed (e.g. after screen lock) so connection and notes resume
+        // Also handle PiP pause/resume on app lifecycle
         lifecycle.addObserver(LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                RelayConnectionStateMachine.getInstance().requestReconnectOnResume()
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    RelayConnectionStateMachine.getInstance().requestReconnectOnResume()
+                    com.example.views.ui.components.PipStreamManager.resumeIfActive()
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    if (!com.example.views.ui.components.PipStreamManager.continueInBackground.value) {
+                        com.example.views.ui.components.PipStreamManager.pauseIfActive()
+                    }
+                }
+                else -> {}
             }
         })
 
@@ -210,7 +236,8 @@ class MainActivity : ComponentActivity(), ComponentCallbacks2 {
     }
 
     override fun onTrimMemory(level: Int) {
-        super.onTrimMemory(level)
+        // Do NOT call super.onTrimMemory — it dispatches to registered ComponentCallbacks
+        // which includes 'this' (registered in onCreate), causing infinite recursion / StackOverflow.
         try {
             when {
                 level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> AppMemoryTrimmer.trimBackgroundCaches(level, this)

@@ -6,6 +6,7 @@ import com.example.views.relay.TemporarySubscriptionHandle
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
 import com.vitorpamplona.quartz.nip65RelayList.tags.AdvertisedRelayType
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,7 +32,7 @@ object Nip65RelayListRepository {
     private const val KIND_RELAY_LIST = 10002
     private const val FETCH_TIMEOUT_MS = 8_000L
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, t -> Log.e(TAG, "Coroutine failed: ${t.message}", t) })
 
     /** Read relays from the user's kind-10002 (where the user reads / inbox). */
     private val _readRelays = MutableStateFlow<List<String>>(emptyList())
@@ -83,6 +84,13 @@ object Nip65RelayListRepository {
         if (cacheRelayUrls.isEmpty()) {
             Log.w(TAG, "No cache relays to fetch kind-10002")
             return
+        }
+        // Reset state when switching to a different pubkey
+        if (pubkeyHex != currentPubkey) {
+            _hasFetched.value = false
+            _readRelays.value = emptyList()
+            _writeRelays.value = emptyList()
+            _allRelays.value = emptyList()
         }
         if (pubkeyHex == currentPubkey && _hasFetched.value) {
             Log.d(TAG, "Already fetched kind-10002 for ${pubkeyHex.take(8)}...")
@@ -165,6 +173,83 @@ object Nip65RelayListRepository {
         _readRelays.value = readUrls.distinct()
         _writeRelays.value = writeUrls.distinct()
         _allRelays.value = allUrls.distinct()
+    }
+
+    // --- Outbox relay lookup for other authors (quoted note preloading) ---
+
+    /** Cache of other authors' write (outbox) relays. LRU, max 100 entries. */
+    private val authorOutboxCache = java.util.Collections.synchronizedMap(
+        object : LinkedHashMap<String, List<String>>(100, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<String>>): Boolean = size > 100
+        }
+    )
+
+    /** In-flight fetches to avoid duplicate requests for the same pubkey. */
+    private val inFlightOutbox = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /**
+     * Get cached outbox (write) relays for an author, or null if not yet fetched.
+     */
+    fun getCachedOutboxRelays(pubkeyHex: String): List<String>? = authorOutboxCache[pubkeyHex]
+
+    /**
+     * Fetch another author's kind-10002 to get their write (outbox) relays.
+     * Results are cached. Returns the write relay URLs, or empty if not found.
+     * Uses cache/discovery relays to find the kind-10002 event.
+     */
+    fun fetchOutboxRelaysForAuthor(pubkeyHex: String, discoveryRelays: List<String>) {
+        if (pubkeyHex.isBlank() || discoveryRelays.isEmpty()) return
+        if (authorOutboxCache.containsKey(pubkeyHex)) return
+        if (inFlightOutbox.putIfAbsent(pubkeyHex, true) != null) return
+
+        scope.launch {
+            try {
+                val filter = Filter(
+                    kinds = listOf(KIND_RELAY_LIST),
+                    authors = listOf(pubkeyHex),
+                    limit = 1
+                )
+
+                var bestEvent: Event? = null
+                val handle = RelayConnectionStateMachine.getInstance()
+                    .requestTemporarySubscription(discoveryRelays, filter) { event ->
+                        if (event.kind == KIND_RELAY_LIST && event.pubKey == pubkeyHex) {
+                            val current = bestEvent
+                            if (current == null || event.createdAt > current.createdAt) {
+                                bestEvent = event
+                            }
+                        }
+                    }
+
+                delay(4_000L) // shorter timeout for preloading
+                handle.cancel()
+
+                val event = bestEvent
+                if (event != null) {
+                    val writeUrls = mutableListOf<String>()
+                    event.tags.forEach { tag ->
+                        if (tag.size >= 2 && tag[0] == "r" && tag[1].isNotBlank()) {
+                            val url = tag[1].trim()
+                            val marker = tag.getOrNull(2)?.lowercase()?.trim()
+                            when (marker) {
+                                "write" -> writeUrls.add(url)
+                                null, "" -> writeUrls.add(url) // no marker = both
+                            }
+                        }
+                    }
+                    authorOutboxCache[pubkeyHex] = writeUrls.distinct()
+                    Log.d(TAG, "Outbox relays for ${pubkeyHex.take(8)}: ${writeUrls.size} write relays")
+                } else {
+                    authorOutboxCache[pubkeyHex] = emptyList()
+                    Log.d(TAG, "No kind-10002 for ${pubkeyHex.take(8)}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to fetch outbox for ${pubkeyHex.take(8)}: ${e.message}")
+                authorOutboxCache[pubkeyHex] = emptyList()
+            } finally {
+                inFlightOutbox.remove(pubkeyHex)
+            }
+        }
     }
 
     /**

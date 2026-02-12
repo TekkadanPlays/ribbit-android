@@ -15,7 +15,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
+import com.example.views.ui.components.cutoutPadding
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -108,6 +112,17 @@ fun ImageContentViewerScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offsetX,
+                        translationY = offsetY
+                    )
+                    // Only intercept pan/zoom gestures when zoomed in; at 1x let pager handle swipes
+                    .then(
+                        if (scale > 1f) Modifier.transformable(transformState)
+                        else Modifier
+                    )
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onDoubleTap = {
@@ -121,14 +136,7 @@ fun ImageContentViewerScreen(
                                 }
                             }
                         )
-                    }
-                    .graphicsLayer(
-                        scaleX = scale,
-                        scaleY = scale,
-                        translationX = offsetX,
-                        translationY = offsetY
-                    )
-                    .transformable(transformState),
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 AsyncImage(
@@ -168,6 +176,7 @@ fun ImageContentViewerScreen(
             }
         }
 
+        Column(Modifier.statusBarsPadding()) {
         TopAppBar(
             title = { },
             navigationIcon = {
@@ -178,6 +187,7 @@ fun ImageContentViewerScreen(
                     )
                 }
             },
+            windowInsets = WindowInsets(0),
             actions = {
                 IconButton(
                     onClick = {
@@ -207,6 +217,7 @@ fun ImageContentViewerScreen(
                 actionIconContentColor = MaterialTheme.colorScheme.onSurface
             )
         )
+        }
     }
 }
 

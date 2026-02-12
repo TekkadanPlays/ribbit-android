@@ -2,8 +2,10 @@ package com.example.views.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import com.example.views.ui.components.cutoutPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -36,28 +38,31 @@ fun SettingsScreen(
 ) {
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "settings",
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
+            Column(Modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = "settings",
+                            fontWeight = FontWeight.Bold
                         )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBackClick) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back"
+                            )
+                        }
+                    },
+                    windowInsets = WindowInsets(0),
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        scrolledContainerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onSurface
+                    )
                 )
-            )
+            }
         }
     ) { paddingValues ->
         var showSupportZapDialog by remember { mutableStateOf(false) }
@@ -74,7 +79,7 @@ fun SettingsScreen(
             SettingsItem(icon = Icons.Outlined.Person, title = "Account Preferences", onClick = { onNavigateTo("account_preferences") })
             SettingsItem(icon = Icons.Outlined.Lock, title = "Filters & Blocks", onClick = { /* TODO */ })
             SettingsItem(icon = Icons.Outlined.Settings, title = "Data and Storage", onClick = { /* TODO */ })
-            SettingsItem(icon = Icons.Outlined.Settings, title = "Advanced", onClick = { /* TODO */ })
+            SettingsItem(icon = Icons.Outlined.Public, title = "Relays", onClick = { onNavigateTo("relay_health") })
 
             HorizontalDivider(
                 thickness = 1.dp,

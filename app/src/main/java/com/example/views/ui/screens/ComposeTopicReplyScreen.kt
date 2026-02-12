@@ -1,6 +1,8 @@
 package com.example.views.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import com.example.views.ui.components.cutoutPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -40,7 +42,8 @@ fun ComposeTopicReplyScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            Column(Modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
+                TopAppBar(
                 title = {
                     Text(
                         text = "Reply to Topic",
@@ -88,10 +91,12 @@ fun ComposeTopicReplyScreen(
                         }
                     }
                 },
+                windowInsets = WindowInsets(0),
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             )
+            }
         }
     ) { paddingValues ->
         Column(

@@ -12,6 +12,7 @@ import com.example.views.data.GUEST_PROFILE
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import com.vitorpamplona.quartz.nip19Bech32.Nip19Parser
 import com.vitorpamplona.quartz.nip19Bech32.entities.NPub
@@ -119,7 +120,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearError() {
-        _authState.value = _authState.value.copy(error = null)
+        _authState.update { it.copy(error = null) }
     }
 
     fun getCurrentSigner() = amberSignerManager.getCurrentSigner()

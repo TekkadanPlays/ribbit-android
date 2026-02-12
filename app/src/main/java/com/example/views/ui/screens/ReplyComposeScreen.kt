@@ -1,6 +1,8 @@
 package com.example.views.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import com.example.views.ui.components.cutoutPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -35,17 +37,20 @@ fun ReplyComposeScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(if (replyToNote != null) "Reply" else "Reply to thread") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
-                        )
-                    }
-                }
-            )
+            Column(Modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
+                TopAppBar(
+                    title = { Text(if (replyToNote != null) "Reply" else "Reply to thread") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back"
+                            )
+                        }
+                    },
+                    windowInsets = WindowInsets(0)
+                )
+            }
         }
     ) { paddingValues ->
         Column(

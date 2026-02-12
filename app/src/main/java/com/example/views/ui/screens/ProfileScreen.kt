@@ -3,6 +3,7 @@ package com.example.views.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import com.example.views.ui.components.cutoutPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -87,51 +88,54 @@ fun ProfileScreen(
             .fillMaxSize()
             .nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "profile",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowBack,
-                            contentDescription = "Back",
-                            tint = Color.White
+            Column(Modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = "profile",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
                         )
-                    }
-                },
-                actions = {
-                    // Search button for searching notes on user's profile
-                    IconButton(onClick = { /* TODO: Search profile notes */ }) {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = "Search profile",
-                            tint = Color.White
-                        )
-                    }
-
-                    // Profile/Login button
-                    if (onLoginClick != null) {
-                        IconButton(onClick = onLoginClick) {
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBackClick) {
                             Icon(
-                                imageVector = Icons.Default.Person,
-                                contentDescription = "Profile",
+                                imageVector = Icons.Default.ArrowBack,
+                                contentDescription = "Back",
                                 tint = Color.White
                             )
                         }
-                    }
-                },
-                scrollBehavior = scrollBehavior,
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surface
+                    },
+                    actions = {
+                        // Search button for searching notes on user's profile
+                        IconButton(onClick = { /* TODO: Search profile notes */ }) {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = "Search profile",
+                                tint = Color.White
+                            )
+                        }
+
+                        // Profile/Login button
+                        if (onLoginClick != null) {
+                            IconButton(onClick = onLoginClick) {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = "Profile",
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                    },
+                    scrollBehavior = scrollBehavior,
+                    windowInsets = WindowInsets(0),
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        scrolledContainerColor = MaterialTheme.colorScheme.surface
+                    )
                 )
-            )
+            }
         }
     ) { paddingValues ->
         LazyColumn(
@@ -177,7 +181,12 @@ fun ProfileScreen(
                     myZappedAmount = myZappedAmountForNote(note.id),
                     overrideReplyCount = overrideReplyCountForNote(note.id),
                     overrideZapCount = countsForNote(note.id)?.zapCount,
+                    overrideZapTotalSats = countsForNote(note.id)?.zapTotalSats,
                     overrideReactions = countsForNote(note.id)?.reactions,
+                    overrideReactionAuthors = countsForNote(note.id)?.reactionAuthors,
+                    overrideZapAuthors = countsForNote(note.id)?.zapAuthors,
+                    overrideZapAmountByAuthor = countsForNote(note.id)?.zapAmountByAuthor,
+                    overrideCustomEmojiUrls = countsForNote(note.id)?.customEmojiUrls,
                     onRelayClick = onRelayClick,
                     accountNpub = accountNpub,
                     modifier = Modifier.fillMaxWidth()

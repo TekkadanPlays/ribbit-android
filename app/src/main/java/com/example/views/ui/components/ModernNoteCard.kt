@@ -292,6 +292,7 @@ private fun NoteCardContent(
 
             // Body zone: only when there is text or quoted notes; otherwise embed/media only (no highlight box)
             val linkStyle = SpanStyle(color = MaterialTheme.colorScheme.primary)
+            val contentIsMarkdown = remember(note.content) { isMarkdown(note.content) }
             val contentBlocks = remember(note.content, note.mediaUrls, note.urlPreviews) {
                 buildNoteContentWithInlinePreviews(
                     note.content,
@@ -325,23 +326,36 @@ private fun NoteCardContent(
                             is NoteContentBlock.Content -> {
                                 val annotated = block.annotated
                                 if (annotated.isNotEmpty()) {
-                                    ClickableNoteContent(
-                                        text = annotated,
-                                        style = NoteBodyTextStyle.copy(
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        ),
-                                        onClick = { offset ->
-                                            val profile = annotated.getStringAnnotations(tag = "PROFILE", start = offset, end = offset).firstOrNull()
-                                            val url = annotated.getStringAnnotations(tag = "URL", start = offset, end = offset).firstOrNull()
-                                            val naddr = annotated.getStringAnnotations(tag = "NADDR", start = offset, end = offset).firstOrNull()
-                                            when {
-                                                profile != null -> onProfileClick(profile.item)
-                                                url != null -> uriHandler.openUri(url.item)
-                                                naddr != null -> uriHandler.openUri(naddr.item)
-                                                else -> onNoteClick(note)
+                                    if (contentIsMarkdown) {
+                                        MarkdownNoteContent(
+                                            content = annotated.text,
+                                            style = NoteBodyTextStyle.copy(
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            ),
+                                            onProfileClick = onProfileClick,
+                                            onNoteClick = { onNoteClick(note) },
+                                            onUrlClick = { url -> uriHandler.openUri(url) },
+                                            onHashtagClick = onHashtagClick
+                                        )
+                                    } else {
+                                        ClickableNoteContent(
+                                            text = annotated,
+                                            style = NoteBodyTextStyle.copy(
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            ),
+                                            onClick = { offset ->
+                                                val profile = annotated.getStringAnnotations(tag = "PROFILE", start = offset, end = offset).firstOrNull()
+                                                val url = annotated.getStringAnnotations(tag = "URL", start = offset, end = offset).firstOrNull()
+                                                val naddr = annotated.getStringAnnotations(tag = "NADDR", start = offset, end = offset).firstOrNull()
+                                                when {
+                                                    profile != null -> onProfileClick(profile.item)
+                                                    url != null -> uriHandler.openUri(url.item)
+                                                    naddr != null -> uriHandler.openUri(naddr.item)
+                                                    else -> onNoteClick(note)
+                                                }
                                             }
-                                        }
-                                    )
+                                        )
+                                    }
                                 }
                             }
                             is NoteContentBlock.Preview -> {
@@ -355,6 +369,9 @@ private fun NoteCardContent(
                             }
                             is NoteContentBlock.MediaGroup -> {
                                 // Media groups handled by the bottom carousel in thread view
+                            }
+                            is NoteContentBlock.QuotedNote -> {
+                                // Inline quoted notes handled by standalone section below
                             }
                         }
                     }
@@ -418,7 +435,7 @@ private fun NoteCardContent(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(280.dp)
+                        .heightIn(min = 200.dp, max = 480.dp)
                 ) {
                     HorizontalPager(
                         state = pagerState,
@@ -430,6 +447,7 @@ private fun NoteCardContent(
                         val alpha = 1f - 0.25f * abs(offsetFromCenter).coerceIn(0f, 1f)
                         val url = mediaList[page]
                         val isVideo = UrlDetector.isVideoUrl(url)
+                        val isCurrentPage = pagerState.currentPage == page
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -446,13 +464,14 @@ private fun NoteCardContent(
                                 InlineVideoPlayer(
                                     url = url,
                                     modifier = Modifier.fillMaxSize(),
+                                    isVisible = isCurrentPage,
                                     onFullscreenClick = { onVideoClick(mediaList, page) }
                                 )
                             } else {
                                 AsyncImage(
                                     model = url,
                                     contentDescription = null,
-                                    contentScale = ContentScale.Crop,
+                                    contentScale = ContentScale.Fit,
                                     modifier = Modifier.fillMaxSize()
                                 )
                                 IconButton(

@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -87,14 +88,14 @@ class ThreadRepliesViewModel : ViewModel() {
 
         viewModelScope.launch {
             repository.isLoading.collect { isLoading ->
-                _uiState.value = _uiState.value.copy(isLoading = isLoading)
+                _uiState.update { it.copy(isLoading = isLoading) }
             }
         }
 
         viewModelScope.launch {
             repository.error.collect { error ->
                 if (error != null) {
-                    _uiState.value = _uiState.value.copy(error = error)
+                    _uiState.update { it.copy(error = error) }
                 }
             }
         }
@@ -115,14 +116,7 @@ class ThreadRepliesViewModel : ViewModel() {
 
         _optimisticReplies.value = emptyList()
         _lastRepoReplies = emptyList()
-        _uiState.value = _uiState.value.copy(
-            note = note,
-            replies = emptyList(),
-            threadedReplies = emptyList(),
-            totalReplyCount = 0,
-            isLoading = true,
-            error = null
-        )
+        _uiState.update { it.copy(note = note, replies = emptyList(), threadedReplies = emptyList(), totalReplyCount = 0, isLoading = true, error = null) }
 
         viewModelScope.launch {
             try {
@@ -137,10 +131,7 @@ class ThreadRepliesViewModel : ViewModel() {
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading replies: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(
-                    error = "Failed to load replies: ${e.message}",
-                    isLoading = false
-                )
+                _uiState.update { it.copy(error = "Failed to load replies: ${e.message}", isLoading = false) }
             }
         }
     }
@@ -178,13 +169,10 @@ class ThreadRepliesViewModel : ViewModel() {
 
         val threadedReplies = organizeRepliesIntoThreads(sortedReplies)
 
-        _uiState.value = _uiState.value.copy(
-            replies = sortedReplies,
-            threadedReplies = threadedReplies,
-            totalReplyCount = merged.size,
-            isLoading = false
-        )
-        com.example.views.repository.ReplyCountCache.set(noteId, merged.size)
+        _uiState.update { it.copy(replies = sortedReplies, threadedReplies = threadedReplies, totalReplyCount = merged.size, isLoading = false) }
+        // Cache only direct (depth-1) reply count for feed cards — not the entire chain
+        val directCount = merged.count { it.replyToId == noteId || it.replyToId == null }
+        com.example.views.repository.ReplyCountCache.set(noteId, directCount)
 
         Log.d(TAG, "Updated replies state: ${merged.size} replies, ${threadedReplies.size} threads")
     }
@@ -263,7 +251,7 @@ class ThreadRepliesViewModel : ViewModel() {
      */
     fun setSortOrder(sortOrder: ReplySortOrder) {
         if (_uiState.value.sortOrder != sortOrder) {
-            _uiState.value = _uiState.value.copy(sortOrder = sortOrder)
+            _uiState.update { it.copy(sortOrder = sortOrder) }
             updateRepliesState(_lastRepoReplies)
         }
     }
@@ -334,11 +322,7 @@ class ThreadRepliesViewModel : ViewModel() {
         _optimisticReplies.value = _optimisticReplies.value.filter { it.rootNoteId != noteId }
         if (_uiState.value.note?.id == noteId) {
             _lastRepoReplies = emptyList()
-            _uiState.value = _uiState.value.copy(
-                replies = emptyList(),
-                threadedReplies = emptyList(),
-                totalReplyCount = 0
-            )
+            _uiState.update { it.copy(replies = emptyList(), threadedReplies = emptyList(), totalReplyCount = 0) }
         }
     }
 

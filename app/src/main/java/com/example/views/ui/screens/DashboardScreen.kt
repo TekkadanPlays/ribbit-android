@@ -13,6 +13,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -49,7 +52,6 @@ import com.example.views.ui.components.BottomNavDestinations
 import com.example.views.ui.components.ModernSearchBar
 import com.example.views.ui.components.GlobalSidebar
 import com.example.views.ui.components.NoteCard
-import com.example.views.ui.components.LiveActivityRow
 import com.example.views.ui.components.LoadingAnimation
 import com.example.views.ui.components.NoteCard
 import com.example.views.viewmodel.DashboardViewModel
@@ -58,6 +60,7 @@ import com.example.views.viewmodel.RelayManagementViewModel
 import com.example.views.viewmodel.FeedStateViewModel
 import com.example.views.viewmodel.HomeSortOrder
 import com.example.views.viewmodel.ScrollPosition
+import com.example.views.data.RelayConnectionStatus
 import com.example.views.relay.RelayState
 import com.example.views.repository.RelayRepository
 import com.example.views.repository.RelayStorageManager
@@ -101,6 +104,8 @@ fun DashboardScreen(
     initialTopAppBarState: TopAppBarState? = null,
     isDashboardVisible: Boolean = true,
     onQrClick: () -> Unit = {},
+    onSidebarSettingsClick: () -> Unit = {},
+    onRelayClick: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -114,9 +119,22 @@ fun DashboardScreen(
     val zappedAmountByNoteId by accountStateViewModel.zappedAmountByNoteId.collectAsState()
     val replyCountByNoteId by com.example.views.repository.ReplyCountCache.replyCountByNoteId.collectAsState()
     val countsByNoteId by com.example.views.repository.NoteCountsRepository.countsByNoteId.collectAsState()
-    val liveActivities by viewModel.liveActivities.collectAsState()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+
+    // Real per-relay connection status from RelayConnectionStateMachine
+    val perRelayState by com.example.views.relay.RelayConnectionStateMachine.getInstance().perRelayState.collectAsState()
+    val liveConnectionStatus = remember(perRelayState) {
+        perRelayState.mapValues { (_, status) ->
+            when (status) {
+                com.example.views.relay.RelayEndpointStatus.Connected -> RelayConnectionStatus.CONNECTED
+                com.example.views.relay.RelayEndpointStatus.Connecting -> RelayConnectionStatus.CONNECTING
+                com.example.views.relay.RelayEndpointStatus.Failed -> RelayConnectionStatus.ERROR
+            }
+        }
+    }
+    val connectedRelayCount = perRelayState.values.count { it == com.example.views.relay.RelayEndpointStatus.Connected }
+    val subscribedRelayCount = perRelayState.size
 
     // Relay management
     val storageManager = remember { RelayStorageManager(context) }
@@ -141,6 +159,22 @@ fun DashboardScreen(
 
     // Track if we've already loaded relays on this mount
     var hasLoadedRelays by remember { mutableStateOf(false) }
+
+    // Onboarding: detect when feed has been empty for too long (new account / no relays)
+    var feedTimedOut by remember { mutableStateOf(false) }
+    LaunchedEffect(isDashboardVisible, uiState.notes.isEmpty(), hasLoadedRelays) {
+        feedTimedOut = false
+        if (isDashboardVisible && uiState.notes.isEmpty()) {
+            kotlinx.coroutines.delay(10_000L)
+            if (uiState.notes.isEmpty()) feedTimedOut = true
+        }
+    }
+    // Reset timeout when notes arrive
+    LaunchedEffect(uiState.notes.size) {
+        if (uiState.notes.isNotEmpty()) feedTimedOut = false
+    }
+    val hasOutboxRelays = relayUiState.outboxRelays.isNotEmpty()
+    val hasAnyConfiguredRelays = relayCategories.flatMap { it.relays }.isNotEmpty()
 
     // If the selected relay/category was removed, fall back to Global
     LaunchedEffect(relayCategories, homeFeedState) {
@@ -197,11 +231,7 @@ fun DashboardScreen(
             // Always run subscription path so connections resume after app close (notes may be from cache).
             // When notes are already present, ensureSubscriptionToNotes only re-applies subscription and does not clear the feed.
             viewModel.loadNotesFromFavoriteCategory(relayUrlsToUse, displayUrls)
-            pubkey?.let { pk ->
-                val cacheUrls = storageManager.loadCacheRelays(pk).map { it.url }
-                com.example.views.repository.NotificationsRepository.setCacheRelayUrls(cacheUrls)
-                com.example.views.repository.NotificationsRepository.startSubscription(pk, relayUrlsToUse)
-            }
+            com.example.views.repository.QuotedNoteCache.setRelayUrls(relayUrlsToUse)
         }
     }
 
@@ -233,6 +263,9 @@ fun DashboardScreen(
                 viewModel.loadFollowList(pubkey, followRelayUrls)
                 // NIP-65: fetch kind-10002 relay list for outbox model (counts use indexer relays)
                 com.example.views.repository.Nip65RelayListRepository.fetchRelayList(pubkey, cacheUrls)
+                // NIP-66: fetch relay discovery events for relay type categorization
+                com.example.views.repository.Nip66RelayDiscoveryRepository.init(context)
+                com.example.views.repository.Nip66RelayDiscoveryRepository.fetchRelayDiscovery(cacheUrls)
             }
         }
     }
@@ -264,7 +297,7 @@ fun DashboardScreen(
     // Zap configuration dialog state
     var showZapConfigDialog by remember { mutableStateOf(false) }
     var showWalletConnectDialog by remember { mutableStateOf(false) }
-    var relayUrlToShowInfo by remember { mutableStateOf<String?>(null) }
+    // Relay orb tap navigates to relay log page via onRelayClick callback
 
     // Restore home feed scroll position when returning to dashboard (one-shot; do not re-run on notes.size)
     val scrollPos = homeFeedState.scrollPosition
@@ -298,23 +331,25 @@ fun DashboardScreen(
         TopAppBarDefaults.enterAlwaysScrollBehavior(topAppBarState)
     }
 
-    // Bottom navigation bar visibility controlled by scroll
-    val isBottomNavVisible = true
-
-    // Real notification count from NotificationsRepository (Amethyst-style p-tag subscription)
-    val notificationList by com.example.views.repository.NotificationsRepository.notifications.collectAsState(initial = emptyList())
-    val totalNotificationCount = notificationList.size
-
     // Notify parent of TopAppBarState changes for thread view inheritance
     LaunchedEffect(topAppBarState) {
         onTopAppBarStateChange(topAppBarState)
     }
 
-    // Merge enrichment side channel (url previews) into notes so we don't replace whole list on preview load
+    // Engagement filter: null = all, "replies" / "likes" / "zaps"
+    var engagementFilter by remember { mutableStateOf<String?>(null) }
+
+    // Merge enrichment side channel (url previews) into notes — only copy notes that actually have new previews
     val notesWithPreviews by remember(uiState.notes, uiState.urlPreviewsByNoteId) {
         derivedStateOf {
-            uiState.notes.map { n ->
-                n.copy(urlPreviews = uiState.urlPreviewsByNoteId[n.id] ?: n.urlPreviews)
+            val previews = uiState.urlPreviewsByNoteId
+            if (previews.isEmpty()) {
+                uiState.notes
+            } else {
+                uiState.notes.map { n ->
+                    val newPreviews = previews[n.id]
+                    if (newPreviews != null && newPreviews != n.urlPreviews) n.copy(urlPreviews = newPreviews) else n
+                }
             }
         }
     }
@@ -327,6 +362,20 @@ fun DashboardScreen(
                 HomeSortOrder.Popular -> notesList.sortedWith(
                     compareByDescending<Note> { it.likes }.thenByDescending { it.timestamp }
                 )
+            }
+        }
+    }
+
+    // Sort by engagement type: Most Replies / Most Likes / Most Zaps
+    val engagementFilteredNotes by remember(sortedNotes, engagementFilter, replyCountByNoteId, countsByNoteId) {
+        derivedStateOf {
+            when (engagementFilter) {
+                "replies" -> sortedNotes.sortedByDescending { replyCountByNoteId[it.id] ?: 0 }
+                "likes" -> sortedNotes.sortedByDescending {
+                    countsByNoteId[it.id]?.reactionAuthors?.values?.sumOf { authors -> authors.size } ?: 0
+                }
+                "zaps" -> sortedNotes.sortedByDescending { countsByNoteId[it.id]?.zapTotalSats ?: 0L }
+                else -> sortedNotes
             }
         }
     }
@@ -358,8 +407,11 @@ fun DashboardScreen(
         feedState = homeFeedState,
         selectedDisplayName = feedStateViewModel.getHomeDisplayName(),
         relayState = uiState.relayState,
-        connectionStatus = relayUiState.connectionStatus,
+        connectionStatus = liveConnectionStatus,
+        connectedRelayCount = connectedRelayCount,
+        subscribedRelayCount = subscribedRelayCount,
         onQrClick = onQrClick,
+        onSettingsClick = onSidebarSettingsClick,
         onItemClick = { itemId ->
             when {
                 itemId == "global" -> {
@@ -566,67 +618,34 @@ fun DashboardScreen(
                         },
                         onEditFeedClick = { /* TODO: custom feed filter views */ },
                         homeSortOrder = homeFeedState.homeSortOrder,
-                        onHomeSortOrderChange = { feedStateViewModel.setHomeSortOrder(it) }
-                    )
-                }
-            },
-            bottomBar = {
-                if (!isSearchMode) {
-                    ScrollAwareBottomNavigationBar(
-                        currentDestination = "home",
-                        isVisible = isBottomNavVisible,
-                        notificationCount = totalNotificationCount,
-                        topAppBarState = topAppBarState,
-                        onDestinationClick = { destination ->
-                            when (destination) {
-                                "home" -> {
-                                    scope.launch {
-                                        topAppBarState.heightOffset = 0f
-                                        listState.scrollToItem(0)
-                                    }
-                                }
-                                "topics" -> onNavigateTo("topics")
-                                "messages" -> onNavigateTo("messages")
-                                "relays" -> onNavigateTo("relays")
-                                "notifications" -> onNavigateTo("notifications")
-                                "profile" -> onNavigateTo("user_profile")
-                                else -> { }
-                            }
-                        }
+                        onHomeSortOrderChange = { feedStateViewModel.setHomeSortOrder(it) },
+                        activeEngagementFilter = engagementFilter,
+                        onEngagementFilterChange = { engagementFilter = it },
+                        onNavigateToTopics = { onNavigateTo("topics") },
+                        onNavigateToLive = { onNavigateTo("live_explorer") }
                     )
                 }
             },
             floatingActionButton = {
-                if (!isSearchMode) {
-                    val fabBottomBarOffset = (48 * topAppBarState.collapsedFraction).dp
-                    Box(modifier = Modifier.offset(y = fabBottomBarOffset)) {
-                        FloatingActionButton(
-                            onClick = { onNavigateTo("compose") },
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        ) {
-                            Icon(Icons.Default.Edit, contentDescription = "Compose note")
-                        }
+                val fabVisible by remember(topAppBarState) {
+                    derivedStateOf { topAppBarState.collapsedFraction < 0.5f }
+                }
+                AnimatedVisibility(
+                    visible = !isSearchMode && fabVisible,
+                    enter = scaleIn() + fadeIn(),
+                    exit = scaleOut() + fadeOut()
+                ) {
+                    FloatingActionButton(
+                        onClick = { onNavigateTo("compose") },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(bottom = 80.dp)
+                    ) {
+                        Icon(Icons.Default.Edit, contentDescription = "Compose note")
                     }
                 }
             }
         ) { paddingValues ->
-            // Calculate dynamic content padding based on navigation bar state
-            val bottomBarHeight = 72.dp // Height of the navigation bar
-            val collapsedFraction = topAppBarState.collapsedFraction
-
-            // Calculate dynamic bottom padding
-            val dynamicBottomPadding by remember(collapsedFraction) {
-                derivedStateOf {
-                    if (collapsedFraction > 0.5f) {
-                        0.dp // Remove bottom padding to expand content
-                    } else {
-                        // Gradually reduce bottom padding as navigation bar hides
-                        bottomBarHeight * (1 - collapsedFraction)
-                    }
-                }
-            }
-
             // Pull-to-refresh: merge pending notes and re-apply relay + follow + reply filters (no full clear).
             PullToRefreshBox(
                 isRefreshing = isRefreshing,
@@ -641,32 +660,13 @@ fun DashboardScreen(
                 },
                 modifier = Modifier
                     .fillMaxSize()
-                    .consumeWindowInsets(paddingValues)
-                    .padding(
-                        start = paddingValues.calculateStartPadding(LocalLayoutDirection.current),
-                        top = paddingValues.calculateTopPadding(),
-                        end = paddingValues.calculateEndPadding(LocalLayoutDirection.current),
-                        bottom = dynamicBottomPadding
-                    )
+                    .padding(paddingValues)
             ) {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 4.dp)
+                    contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
                 ) {
-                    // NIP-53 Live Activity chips row (above feed, only when streams are live)
-                    if (liveActivities.isNotEmpty()) {
-                        item(key = "live_activities_row") {
-                            LiveActivityRow(
-                                liveActivities = liveActivities,
-                                onActivityClick = { activity ->
-                                    val addressableId = android.net.Uri.encode("${activity.hostPubkey}:${activity.dTag}")
-                                    onNavigateTo("live_stream/$addressableId")
-                                }
-                            )
-                        }
-                    }
-
                     // New notes counter (tap to load) — below live activities, non-sticky
                     run {
                         val newCount = if (homeFeedState.isFollowing) uiState.newNotesCountFollowing else uiState.newNotesCountAll
@@ -711,28 +711,87 @@ fun DashboardScreen(
                         }
                     }
 
-                    // Logged in but notes still loading (first load): full-screen centered expressive spinner
-                    // Spinner stays until notes actually appear in the feed (not just counted in background)
+                    // Logged in but notes still loading (first load)
                     if (sortedNotes.isEmpty()) {
-                        item(key = "notes_loading") {
-                            Box(
-                                modifier = Modifier
-                                    .fillParentMaxHeight()
-                                    .fillMaxWidth(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(48.dp),
-                                    strokeWidth = 3.dp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                        if (feedTimedOut || (!hasOutboxRelays && !hasAnyConfiguredRelays)) {
+                            // Onboarding empty state — new account or no relays configured
+                            item(key = "onboarding_prompt") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillParentMaxHeight()
+                                        .fillMaxWidth(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.padding(horizontal = 32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Outlined.Public,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(64.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                        )
+                                        Spacer(Modifier.height(16.dp))
+                                        Text(
+                                            text = "Welcome to Ribbit",
+                                            style = MaterialTheme.typography.headlineSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                        Text(
+                                            text = if (!hasOutboxRelays)
+                                                "Set up your relays to start seeing notes and let others find you."
+                                            else
+                                                "No notes found yet. Try adding more relays or discovering new ones.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                        Spacer(Modifier.height(24.dp))
+                                        FilledTonalButton(
+                                            onClick = { onNavigateTo("settings/relay_health") },
+                                            modifier = Modifier.fillMaxWidth(0.7f)
+                                        ) {
+                                            Icon(Icons.Outlined.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("Set Up Relays")
+                                        }
+                                        Spacer(Modifier.height(8.dp))
+                                        OutlinedButton(
+                                            onClick = { onNavigateTo("relay_discovery") },
+                                            modifier = Modifier.fillMaxWidth(0.7f)
+                                        ) {
+                                            Icon(Icons.Outlined.Explore, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("Discover Relays")
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // Still loading — show spinner
+                            item(key = "notes_loading") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillParentMaxHeight()
+                                        .fillMaxWidth(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(48.dp),
+                                        strokeWidth = 3.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
                             }
                         }
                     }
                     // Stable keys (note.id) so LazyColumn recomposes only changed items when the feed list updates.
                     // contentType enables efficient item recycling across scroll.
                     items(
-                        items = sortedNotes,
+                        items = engagementFilteredNotes,
                         key = { it.id },
                         contentType = { "note_card" }
                     ) { note ->
@@ -763,14 +822,19 @@ fun DashboardScreen(
                             },
                             onZapSettings = { showZapConfigDialog = true },
                             shouldCloseZapMenus = shouldCloseZapMenus,
-                            onRelayClick = { relayUrlToShowInfo = it },
+                            onRelayClick = onRelayClick,
                             accountNpub = currentAccount?.npub,
                             isZapInProgress = note.id in zapInProgressNoteIds,
                             isZapped = note.id in zappedNoteIds,
                             myZappedAmount = zappedAmountByNoteId[note.id],
-                            overrideReplyCount = replyCountByNoteId[note.id],
+                            overrideReplyCount = replyCountByNoteId[note.id] ?: countsByNoteId[note.id]?.replyCount,
                             overrideZapCount = countsByNoteId[note.id]?.zapCount,
+                            overrideZapTotalSats = countsByNoteId[note.id]?.zapTotalSats,
                             overrideReactions = countsByNoteId[note.id]?.reactions,
+                            overrideReactionAuthors = countsByNoteId[note.id]?.reactionAuthors,
+                            overrideZapAuthors = countsByNoteId[note.id]?.zapAuthors,
+                            overrideZapAmountByAuthor = countsByNoteId[note.id]?.zapAmountByAuthor,
+                            overrideCustomEmojiUrls = countsByNoteId[note.id]?.customEmojiUrls,
                             showHashtagsSection = false,
                             initialMediaPage = mediaPageForNote(note.id),
                             onMediaPageChanged = { page -> onMediaPageChanged(note.id, page) },
@@ -812,13 +876,6 @@ fun DashboardScreen(
         )
     }
 
-    // Relay info dialog (from note card orb tap)
-    relayUrlToShowInfo?.let { url ->
-        com.example.views.ui.components.RelayInfoDialog(
-            relayUrl = url,
-            onDismiss = { relayUrlToShowInfo = null }
-        )
-    }
 }
 
 

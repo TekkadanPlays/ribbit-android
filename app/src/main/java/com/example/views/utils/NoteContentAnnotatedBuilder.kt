@@ -270,6 +270,8 @@ sealed class NoteContentBlock {
     data class Preview(val previewInfo: UrlPreviewInfo) : NoteContentBlock()
     /** A group of consecutive media URLs (images/videos) to render as an inline album carousel. */
     data class MediaGroup(val urls: List<String>) : NoteContentBlock()
+    /** An inline quoted note reference (nostr:nevent1.../nostr:note1...) at its position in the text flow. */
+    data class QuotedNote(val eventId: String) : NoteContentBlock()
 }
 
 /**
@@ -292,17 +294,42 @@ fun buildNoteContentWithInlinePreviews(
     val previewByUrl = urlPreviews.associateBy { it.url }
 
     // Build an ordered list of "markers" – each is either a media URL or a link-preview URL at a position
-    data class Marker(val start: Int, val end: Int, val url: String, val isMedia: Boolean, val preview: UrlPreviewInfo?)
+    data class Marker(val start: Int, val end: Int, val url: String, val isMedia: Boolean, val preview: UrlPreviewInfo?, val quotedEventId: String? = null)
     // consumedUrls are hidden from text (like media) but not rendered as media groups
     val allHiddenUrls = mediaUrls + consumedUrls
-    val markers = urlPositions.map { (range, url) ->
+
+    // Detect nostr:nevent1.../nostr:note1... references with positions for inline quoted notes
+    val quotePattern = Regex("(nostr:)?(nevent1|note1)([qpzry9x8gf2tvdw0s3jn54khce6mua7l]+)", RegexOption.IGNORE_CASE)
+    val quoteMarkers = quotePattern.findAll(content).mapNotNull { match ->
+        val fullUri = if (match.value.startsWith("nostr:", ignoreCase = true)) match.value else "nostr:${match.value}"
+        try {
+            val parsed = com.vitorpamplona.quartz.nip19Bech32.Nip19Parser.uriToRoute(fullUri) ?: return@mapNotNull null
+            val hex = when (val entity = parsed.entity) {
+                is com.vitorpamplona.quartz.nip19Bech32.entities.NEvent -> entity.hex
+                is com.vitorpamplona.quartz.nip19Bech32.entities.NNote -> entity.hex
+                else -> null
+            }
+            if (hex != null && hex.length == 64) Marker(match.range.first, match.range.last + 1, match.value, false, null, hex) else null
+        } catch (_: Exception) { null }
+    }.toList()
+
+    val urlMarkers = urlPositions.map { (range, url) ->
         val isMed = url in mediaUrls
         val isConsumed = url in consumedUrls
         Marker(range.first, range.last + 1, url, isMed || isConsumed, if (!isMed && !isConsumed) previewByUrl[url] else null)
-    }.sortedBy { it.start }
+    }
+
+    // Merge and sort all markers by position; quote markers take priority over URL markers at same position
+    val quoteRanges = quoteMarkers.map { it.start..it.end }.toSet()
+    val filteredUrlMarkers = urlMarkers.filter { m -> quoteRanges.none { qr -> m.start in qr || m.end - 1 in qr } }
+    val markers = (filteredUrlMarkers + quoteMarkers).sortedBy { it.start }
+
+    // Also hide quote URIs from text rendering
+    val quoteUris = quoteMarkers.map { it.url }.toSet()
+    val allHiddenUrlsWithQuotes = allHiddenUrls + quoteUris
 
     if (markers.isEmpty()) {
-        val full = buildNoteContentAnnotatedString(content, allHiddenUrls, linkStyle, profileCache, null)
+        val full = buildNoteContentAnnotatedString(content, allHiddenUrlsWithQuotes, linkStyle, profileCache, null)
         return if (full.isNotEmpty()) listOf(NoteContentBlock.Content(full)) else emptyList()
     }
 
@@ -313,7 +340,7 @@ fun buildNoteContentWithInlinePreviews(
     fun emitTextBlock(from: Int, to: Int) {
         if (from >= to) return
         val chunk = buildNoteContentAnnotatedString(
-            content, allHiddenUrls, linkStyle, profileCache,
+            content, allHiddenUrlsWithQuotes, linkStyle, profileCache,
             IntRange(from, to - 1)
         )
         if (chunk.isNotEmpty()) blocks.add(NoteContentBlock.Content(chunk))
@@ -322,7 +349,13 @@ fun buildNoteContentWithInlinePreviews(
     var i = 0
     while (i < markers.size) {
         val m = markers[i]
-        if (m.isMedia) {
+        if (m.quotedEventId != null) {
+            // Inline quoted note – emit text before it, then the quote block
+            emitTextBlock(cursor, m.start)
+            blocks.add(NoteContentBlock.QuotedNote(m.quotedEventId))
+            cursor = m.end
+            i++
+        } else if (m.isMedia) {
             // Start of a potential media group – collect consecutive media markers
             val groupUrls = mutableListOf<String>()
             if (m.url !in consumedUrls) groupUrls.add(m.url)
@@ -370,6 +403,15 @@ fun extractPubkeysFromContent(content: String): List<String> {
         try {
             val parsed = Nip19Parser.uriToRoute(fullUri) ?: return@forEach
             val hex = (parsed.entity as? NPub)?.hex?.lowercase() ?: return@forEach
+            if (hex.length == 64 && seen.add(hex)) result.add(hex)
+        } catch (_: Exception) { }
+    }
+    // NIP-19 nprofile mentions (profile with relay hints)
+    nprofilePattern.findAll(content).forEach { match ->
+        val fullUri = if (match.value.startsWith("nostr:", ignoreCase = true)) match.value else "nostr:${match.value}"
+        try {
+            val parsed = Nip19Parser.uriToRoute(fullUri) ?: return@forEach
+            val hex = (parsed.entity as? NProfile)?.hex?.lowercase() ?: return@forEach
             if (hex.length == 64 && seen.add(hex)) result.add(hex)
         } catch (_: Exception) { }
     }

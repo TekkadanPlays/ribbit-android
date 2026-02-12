@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 @Immutable
@@ -81,15 +82,12 @@ class TopicsViewModel(application: Application) : AndroidViewModel(application) 
                 val summary = if (total > 0) "$connected/$total relays" else null
                 state to summary
             }.collect { (state, summary) ->
-                _uiState.value = _uiState.value.copy(
-                    relayState = state,
-                    relayCountSummary = summary
-                )
+                _uiState.update { it.copy(relayState = state, relayCountSummary = summary) }
             }
         }
         viewModelScope.launch {
             repository.newTopicsCount.collect { count ->
-                _uiState.value = _uiState.value.copy(newTopicsCount = count)
+                _uiState.update { it.copy(newTopicsCount = count) }
             }
         }
     }
@@ -108,39 +106,39 @@ class TopicsViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             repository.hashtagStats.collect { stats ->
                 val sortedStats = sortHashtagStats(stats, _uiState.value.sortOrder)
-                _uiState.value = _uiState.value.copy(hashtagStats = sortedStats)
+                _uiState.update { it.copy(hashtagStats = sortedStats) }
             }
         }
 
         viewModelScope.launch {
             repository.topics.collect { _ ->
                 val allTopics = repository.getAllTopics()
-                _uiState.value = _uiState.value.copy(allTopics = allTopics)
+                _uiState.update { it.copy(allTopics = allTopics) }
 
                 val selectedHashtag = _uiState.value.selectedHashtag
                 if (selectedHashtag != null) {
                     val topicsForHashtag = repository.getTopicsForHashtag(selectedHashtag)
-                    _uiState.value = _uiState.value.copy(topicsForSelectedHashtag = topicsForHashtag)
+                    _uiState.update { it.copy(topicsForSelectedHashtag = topicsForHashtag) }
                 }
             }
         }
 
         viewModelScope.launch {
             repository.isLoading.collect { loading ->
-                _uiState.value = _uiState.value.copy(isLoading = loading)
+                _uiState.update { it.copy(isLoading = loading) }
             }
         }
 
         viewModelScope.launch {
             repository.isReceivingEvents.collect { receiving ->
-                _uiState.value = _uiState.value.copy(isReceivingEvents = receiving)
+                _uiState.update { it.copy(isReceivingEvents = receiving) }
             }
         }
 
         viewModelScope.launch {
             repository.error.collect { error ->
                 if (error != null) {
-                    _uiState.value = _uiState.value.copy(error = error)
+                    _uiState.update { it.copy(error = error) }
                 }
             }
         }
@@ -164,29 +162,17 @@ class TopicsViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        _uiState.value = _uiState.value.copy(
-            connectedRelays = displayRelays,
-            isLoading = true,
-            isReceivingEvents = false,
-            error = null
-        )
+        _uiState.update { it.copy(connectedRelays = displayRelays, isLoading = true, isReceivingEvents = false, error = null) }
 
         viewModelScope.launch {
             try {
                 if (allUserRelayUrls.isNotEmpty()) repository.setSubscriptionRelays(allUserRelayUrls)
                 repository.connectToRelays(displayRelays)
                 // Sync loading state: connectToRelays clears repo loading; ensure UI doesn't stay on "Connecting to relays..."
-                _uiState.value = _uiState.value.copy(
-                    isLoading = repository.isLoadingTopics(),
-                    isReceivingEvents = repository.isReceivingEvents.value
-                )
+                _uiState.update { it.copy(isLoading = repository.isLoadingTopics(), isReceivingEvents = repository.isReceivingEvents.value) }
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading topics: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(
-                    error = "Failed to load topics: ${e.message}",
-                    isLoading = false,
-                    isReceivingEvents = false
-                )
+                _uiState.update { it.copy(error = "Failed to load topics: ${e.message}", isLoading = false, isReceivingEvents = false) }
             }
         }
     }
@@ -196,7 +182,7 @@ class TopicsViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setDisplayFilterOnly(displayUrls: List<String>) {
         repository.connectToRelays(displayUrls)
-        _uiState.value = _uiState.value.copy(connectedRelays = displayUrls)
+        _uiState.update { it.copy(connectedRelays = displayUrls) }
     }
 
     /**
@@ -233,9 +219,7 @@ class TopicsViewModel(application: Application) : AndroidViewModel(application) 
                 repository.refresh(currentRelays)
             } catch (e: Exception) {
                 Log.e(TAG, "Error refreshing topics: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(
-                    error = "Failed to refresh topics: ${e.message}"
-                )
+                _uiState.update { it.copy(error = "Failed to refresh topics: ${e.message}") }
             }
         }
     }
@@ -250,22 +234,14 @@ class TopicsViewModel(application: Application) : AndroidViewModel(application) 
             emptyList()
         }
 
-        _uiState.value = _uiState.value.copy(
-            selectedHashtag = hashtag,
-            topicsForSelectedHashtag = topicsForHashtag,
-            isViewingHashtagFeed = hashtag != null
-        )
+        _uiState.update { it.copy(selectedHashtag = hashtag, topicsForSelectedHashtag = topicsForHashtag, isViewingHashtagFeed = hashtag != null) }
     }
 
     /**
      * Clear selected hashtag and return to hashtag list
      */
     fun clearSelectedHashtag() {
-        _uiState.value = _uiState.value.copy(
-            selectedHashtag = null,
-            topicsForSelectedHashtag = emptyList(),
-            isViewingHashtagFeed = false
-        )
+        _uiState.update { it.copy(selectedHashtag = null, topicsForSelectedHashtag = emptyList(), isViewingHashtagFeed = false) }
     }
 
     /**
@@ -274,10 +250,7 @@ class TopicsViewModel(application: Application) : AndroidViewModel(application) 
     fun setSortOrder(sortOrder: HashtagSortOrder) {
         if (_uiState.value.sortOrder != sortOrder) {
             val sortedStats = sortHashtagStats(_uiState.value.hashtagStats, sortOrder)
-            _uiState.value = _uiState.value.copy(
-                sortOrder = sortOrder,
-                hashtagStats = sortedStats
-            )
+            _uiState.update { it.copy(sortOrder = sortOrder, hashtagStats = sortedStats) }
         }
     }
 
@@ -300,7 +273,7 @@ class TopicsViewModel(application: Application) : AndroidViewModel(application) 
      * Clear error message
      */
     fun clearError() {
-        _uiState.value = _uiState.value.copy(error = null)
+        _uiState.update { it.copy(error = null) }
     }
 
     /**

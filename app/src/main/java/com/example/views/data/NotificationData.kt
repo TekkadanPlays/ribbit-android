@@ -30,7 +30,11 @@ data class NotificationData(
     /** Total zap amount in sats (for ZAP type, parsed from bolt11 invoice). */
     val zapAmountSats: Long = 0L,
     /** NIP-25 reaction emoji for LIKE type (e.g. "❤️", "🔥", "👍", or "+" for default like). */
-    val reactionEmoji: String? = null
+    val reactionEmoji: String? = null,
+    /** Media URLs (images/videos) found in the notification note content. */
+    val mediaUrls: List<String> = emptyList(),
+    /** Quoted event IDs (nevent/note1 references) found in the notification note content. */
+    val quotedEventIds: List<String> = emptyList()
 )
 
 enum class NotificationType {

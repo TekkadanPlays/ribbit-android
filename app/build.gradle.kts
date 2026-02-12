@@ -16,8 +16,8 @@ android {
         applicationId = "com.example.views.ribbit"
         minSdk = 35
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.1.5"
+        versionCode = 8
+        versionName = "0.1.6-beta"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -31,11 +31,18 @@ android {
 
     signingConfigs {
         create("release") {
-            // Use debug signing for now - replace with proper keystore for production
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-            storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
-            storePassword = "android"
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            } else {
+                // Fallback to debug keystore when no keystore.properties
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+                storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+                storePassword = "android"
+            }
         }
     }
 
@@ -113,15 +120,25 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("io.coil-kt:coil-compose:2.5.0")
     implementation("io.coil-kt:coil-gif:2.5.0")
+    implementation("io.coil-kt:coil-video:2.5.0")
     implementation("androidx.media3:media3-exoplayer:1.3.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.3.1")
     implementation("androidx.media3:media3-ui:1.3.1")
+
+    // Markdown rendering (compose-richtext)
+    implementation(libs.richtext.ui)
+    implementation(libs.richtext.ui.material3)
+    implementation(libs.richtext.commonmark)
 
     // HTML parsing for URL previews
     implementation("org.jsoup:jsoup:1.17.2")
 
     // QR code generation (npub share)
     implementation("com.google.zxing:core:3.5.2")
+
+    // ML Kit: on-demand translation (language detection + translation)
+    implementation("com.google.mlkit:language-id:17.0.6")
+    implementation("com.google.mlkit:translate:17.0.3")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

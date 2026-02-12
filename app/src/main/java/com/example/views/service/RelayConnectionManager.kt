@@ -28,7 +28,7 @@ class RelayConnectionManager {
     
     // Connection status for each relay
     private val _connectionStatus = MutableStateFlow<Map<String, RelayConnectionStatus>>(emptyMap())
-    val connectionStatus: StateFlow<Map<String, RelayConnectionStatus>> = _connectionStatus
+    val connectionStatus: StateFlow<Map<String, RelayConnectionStatus>> = _connectionStatus.asStateFlow()
     
     // Coroutine scope for connection management
     private val connectionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 /**
  * ViewModel to manage separate feed states for Home and Topics feeds
@@ -37,13 +38,7 @@ class FeedStateViewModel : ViewModel() {
      * Set global feed for home (all relays). Does not change the Following feed filter.
      */
     fun setHomeGlobal() {
-        _homeFeedState.value = _homeFeedState.value.copy(
-            isGlobal = true,
-            selectedCategoryId = null,
-            selectedCategoryName = null,
-            selectedRelayUrl = null,
-            selectedRelayName = null
-        )
+        _homeFeedState.update { it.copy(isGlobal = true, selectedCategoryId = null, selectedCategoryName = null, selectedRelayUrl = null, selectedRelayName = null) }
     }
 
     /**
@@ -51,159 +46,105 @@ class FeedStateViewModel : ViewModel() {
      * When true, only notes from followed users are shown; when false, all notes from selected relay(s) are shown.
      */
     fun setHomeFollowingFilter(enabled: Boolean) {
-        _homeFeedState.value = _homeFeedState.value.copy(isFollowing = enabled)
+        _homeFeedState.update { it.copy(isFollowing = enabled) }
     }
 
     /**
      * Set home feed sort order (Latest = by time, Popular = by engagement).
      */
     fun setHomeSortOrder(sortOrder: HomeSortOrder) {
-        _homeFeedState.value = _homeFeedState.value.copy(homeSortOrder = sortOrder)
+        _homeFeedState.update { it.copy(homeSortOrder = sortOrder) }
     }
 
     /**
      * Set selected relay category for home feed (does not change isFollowing).
      */
     fun setHomeSelectedCategory(categoryId: String?, categoryName: String?) {
-        _homeFeedState.value = _homeFeedState.value.copy(
-            isGlobal = false,
-            selectedCategoryId = categoryId,
-            selectedCategoryName = categoryName,
-            selectedRelayUrl = null,
-            selectedRelayName = null
-        )
+        _homeFeedState.update { it.copy(isGlobal = false, selectedCategoryId = categoryId, selectedCategoryName = categoryName, selectedRelayUrl = null, selectedRelayName = null) }
     }
 
     /**
      * Set selected relay for home feed
      */
     fun setHomeSelectedRelay(relayUrl: String?, relayName: String?) {
-        _homeFeedState.value = _homeFeedState.value.copy(
-            isGlobal = false,
-            selectedCategoryId = null,
-            selectedCategoryName = null,
-            selectedRelayUrl = relayUrl,
-            selectedRelayName = relayName
-        )
+        _homeFeedState.update { it.copy(isGlobal = false, selectedCategoryId = null, selectedCategoryName = null, selectedRelayUrl = relayUrl, selectedRelayName = relayName) }
     }
 
     /**
      * Set or clear the Following filter for topics feed (same idea as home).
      */
     fun setTopicsFollowingFilter(enabled: Boolean) {
-        _topicsFeedState.value = _topicsFeedState.value.copy(topicsIsFollowing = enabled)
+        _topicsFeedState.update { it.copy(topicsIsFollowing = enabled) }
     }
 
     /**
      * Set topics feed sort order (Latest / Popular).
      */
     fun setTopicsSortOrder(sortOrder: TopicsSortOrder) {
-        _topicsFeedState.value = _topicsFeedState.value.copy(topicsSortOrder = sortOrder)
+        _topicsFeedState.update { it.copy(topicsSortOrder = sortOrder) }
     }
 
     /**
      * Set global feed for topics (all relays)
      */
     fun setTopicsGlobal() {
-        _topicsFeedState.value = _topicsFeedState.value.copy(
-            isGlobal = true,
-            selectedCategoryId = null,
-            selectedCategoryName = null,
-            selectedRelayUrl = null,
-            selectedRelayName = null
-        )
+        _topicsFeedState.update { it.copy(isGlobal = true, selectedCategoryId = null, selectedCategoryName = null, selectedRelayUrl = null, selectedRelayName = null) }
     }
 
     /**
      * Set selected relay category for topics feed
      */
     fun setTopicsSelectedCategory(categoryId: String?, categoryName: String?) {
-        _topicsFeedState.value = _topicsFeedState.value.copy(
-            isGlobal = false,
-            selectedCategoryId = categoryId,
-            selectedCategoryName = categoryName,
-            selectedRelayUrl = null,
-            selectedRelayName = null
-        )
+        _topicsFeedState.update { it.copy(isGlobal = false, selectedCategoryId = categoryId, selectedCategoryName = categoryName, selectedRelayUrl = null, selectedRelayName = null) }
     }
 
     /**
      * Set selected relay for topics feed
      */
     fun setTopicsSelectedRelay(relayUrl: String?, relayName: String?) {
-        _topicsFeedState.value = _topicsFeedState.value.copy(
-            isGlobal = false,
-            selectedCategoryId = null,
-            selectedCategoryName = null,
-            selectedRelayUrl = relayUrl,
-            selectedRelayName = relayName
-        )
+        _topicsFeedState.update { it.copy(isGlobal = false, selectedCategoryId = null, selectedCategoryName = null, selectedRelayUrl = relayUrl, selectedRelayName = relayName) }
     }
 
     /**
      * Set selected topic (hashtag) for topics feed so it persists across navigation.
      */
     fun setTopicsSelectedHashtag(hashtag: String?) {
-        _topicsFeedState.value = _topicsFeedState.value.copy(
-            selectedHashtag = hashtag,
-            isViewingHashtagFeed = hashtag != null
-        )
+        _topicsFeedState.update { it.copy(selectedHashtag = hashtag, isViewingHashtagFeed = hashtag != null) }
     }
 
     /**
      * Clear selected topic and return to topics explorer list.
      */
     fun clearTopicsSelectedHashtag() {
-        _topicsFeedState.value = _topicsFeedState.value.copy(
-            selectedHashtag = null,
-            isViewingHashtagFeed = false
-        )
+        _topicsFeedState.update { it.copy(selectedHashtag = null, isViewingHashtagFeed = false) }
     }
 
     /**
      * Toggle expanded state for a category in home feed
      */
     fun toggleHomeExpandedCategory(categoryId: String) {
-        val current = _homeFeedState.value.expandedCategories
-        _homeFeedState.value = _homeFeedState.value.copy(
-            expandedCategories = if (categoryId in current) {
-                current - categoryId
-            } else {
-                current + categoryId
-            }
-        )
+        _homeFeedState.update { it.copy(expandedCategories = if (categoryId in it.expandedCategories) it.expandedCategories - categoryId else it.expandedCategories + categoryId) }
     }
 
     /**
      * Toggle expanded state for a category in topics feed
      */
     fun toggleTopicsExpandedCategory(categoryId: String) {
-        val current = _topicsFeedState.value.expandedCategories
-        _topicsFeedState.value = _topicsFeedState.value.copy(
-            expandedCategories = if (categoryId in current) {
-                current - categoryId
-            } else {
-                current + categoryId
-            }
-        )
+        _topicsFeedState.update { it.copy(expandedCategories = if (categoryId in it.expandedCategories) it.expandedCategories - categoryId else it.expandedCategories + categoryId) }
     }
 
     /**
      * Save scroll position for home feed
      */
     fun saveHomeScrollPosition(firstVisibleItem: Int, scrollOffset: Int) {
-        _homeFeedState.value = _homeFeedState.value.copy(
-            scrollPosition = ScrollPosition(firstVisibleItem, scrollOffset)
-        )
+        _homeFeedState.update { it.copy(scrollPosition = ScrollPosition(firstVisibleItem, scrollOffset)) }
     }
 
     /**
      * Save scroll position for topics feed
      */
     fun saveTopicsScrollPosition(firstVisibleItem: Int, scrollOffset: Int) {
-        _topicsFeedState.value = _topicsFeedState.value.copy(
-            scrollPosition = ScrollPosition(firstVisibleItem, scrollOffset)
-        )
+        _topicsFeedState.update { it.copy(scrollPosition = ScrollPosition(firstVisibleItem, scrollOffset)) }
     }
 
     /**

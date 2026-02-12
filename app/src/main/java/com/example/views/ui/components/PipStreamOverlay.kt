@@ -26,7 +26,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.HeadsetOff
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -120,15 +123,15 @@ fun PipStreamOverlay(
         var isOverTrash by remember { mutableStateOf(false) }
 
         // Trash zone geometry — raised well above home bar
-        val trashZoneSize = 64.dp
+        val trashZoneSize = 80.dp
         val trashZoneSizeAnimated by animateDpAsState(
-            targetValue = if (isOverTrash) 72.dp else trashZoneSize,
+            targetValue = if (isOverTrash) 88.dp else trashZoneSize,
             animationSpec = tween(150),
             label = "trashSize"
         )
         val trashCenterXPx = screenWidthPx / 2f
         val trashCenterYPx = with(density) { (screenHeightDp - 140.dp).toPx() }
-        val trashRadiusPx = with(density) { 56.dp.toPx() }
+        val trashRadiusPx = with(density) { 72.dp.toPx() }
 
         Box(modifier = Modifier.fillMaxSize()) {
             // Trash zone — only visible while dragging
@@ -152,10 +155,13 @@ fun PipStreamOverlay(
                         Icons.Default.Delete,
                         contentDescription = "Dismiss",
                         tint = Color.White,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(28.dp)
                     )
                 }
             }
+
+            // Background playback toggle state
+            val continueInBg by PipStreamManager.continueInBackground.collectAsState()
 
             // PiP window
             Box(
@@ -247,6 +253,27 @@ fun PipStreamOverlay(
                         view.player = state.player
                     }
                 )
+
+                // Background playback toggle — top-left corner
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(4.dp)
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.5f))
+                        .clickable {
+                            PipStreamManager.setContinueInBackground(!continueInBg)
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (continueInBg) Icons.Default.Headphones else Icons.Default.HeadsetOff,
+                        contentDescription = if (continueInBg) "Background play on" else "Background play off",
+                        tint = if (continueInBg) Color(0xFF4CAF50) else Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
     }

@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -19,8 +20,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
@@ -37,13 +41,16 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.unit.dp
@@ -63,7 +70,6 @@ import com.example.views.repository.RelayRepository
 import com.example.views.repository.RelayStorageManager
 import com.example.views.ui.components.NoteCard
 import com.example.views.utils.normalizeAuthorIdForCache
-import com.example.views.ui.components.RelayInfoDialog
 import com.example.views.ui.components.ScrollAwareBottomNavigationBar
 import com.example.views.ui.components.ThreadSlideBackBox
 import com.example.views.ui.screens.AboutScreen
@@ -83,9 +89,13 @@ import com.example.views.ui.screens.TopicsScreen
 import com.example.views.ui.screens.TopicThreadScreen
 import com.example.views.ui.screens.ProfileScreen
 import com.example.views.ui.screens.RelayLogScreen
+import com.example.views.ui.screens.RelayDiscoveryScreen
+import com.example.views.ui.screens.RelayHealthScreen
 import com.example.views.ui.screens.RelayManagementScreen
 import com.example.views.ui.screens.SettingsScreen
+import com.example.views.ui.screens.LiveExplorerScreen
 import com.example.views.ui.screens.LiveStreamScreen
+import com.example.views.ui.components.PipStreamManager
 import com.example.views.ui.components.PipStreamOverlay
 import com.example.views.ui.screens.QrCodeScreen
 import com.example.views.ui.screens.ReplyComposeScreen
@@ -145,6 +155,7 @@ fun RibbitNavigation(
     val dashboardListState = rememberLazyListState()
     val topicsListState = rememberLazyListState()
     val notificationsListState = rememberLazyListState()
+    var notificationsSelectedTab by remember { mutableIntStateOf(0) }
     val coroutineScope = rememberCoroutineScope()
 
     // Observe async toast messages (e.g. reaction failures)
@@ -185,30 +196,45 @@ fun RibbitNavigation(
 
     // Overlay thread state – hoisted so the Scaffold can hide the bottom nav when a thread overlay is active
     var overlayThreadNoteId by remember { mutableStateOf<String?>(null) }
+    var overlayTopicThreadNoteId by remember { mutableStateOf<String?>(null) }
 
     // Determine current route to show/hide bottom nav
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
-    // Clear overlay when navigating away from dashboard (but not when in image/video viewer – pop returns to thread overlay)
+    // Clear overlays when navigating away from their host screen.
+    // Preserve overlay when navigating to screens that should return to the thread on back
+    // (profile, image/video viewer, thread, reply compose, QR).
+    val overlayPreserveRoutes = setOf("dashboard", "image_viewer", "video_viewer", "user_qr", "reply_compose")
     LaunchedEffect(currentRoute) {
-        if (currentRoute != "dashboard" && currentRoute != "image_viewer" && currentRoute != "video_viewer") {
+        val route = currentRoute ?: return@LaunchedEffect
+        val preserveDashboardOverlay = route in overlayPreserveRoutes
+                || route.startsWith("profile/")
+                || route.startsWith("thread/")
+        if (!preserveDashboardOverlay) {
             overlayThreadNoteId = null
+        }
+        val preserveTopicOverlay = route == "topics" || route in overlayPreserveRoutes
+                || route.startsWith("profile/")
+                || route.startsWith("thread/")
+        if (!preserveTopicOverlay) {
+            overlayTopicThreadNoteId = null
         }
     }
 
     // Main screens that should show the bottom navigation
-    val mainScreenRoutes = setOf("dashboard", "notifications", "relays", "messages", "profile", "topics")
+    val mainScreenRoutes = setOf("dashboard", "notifications", "relays", "messages", "wallet", "profile/{authorId}", "user_profile", "topics")
     val showBottomNav = currentAccount != null
         && (currentRoute in mainScreenRoutes || currentRoute?.startsWith("profile") == true)
         && currentRoute?.startsWith("thread") != true
         && overlayThreadNoteId == null
+        && overlayTopicThreadNoteId == null
 
     // Defer showing bottom bar when returning from thread so pop transition settles (avoids flash)
     var allowBottomNavVisible by remember { mutableStateOf(true) }
     val isMainScreen = (currentRoute in mainScreenRoutes || currentRoute?.startsWith("profile") == true) &&
-            currentRoute?.startsWith("thread") != true && overlayThreadNoteId == null
-    LaunchedEffect(currentRoute, overlayThreadNoteId) {
+            currentRoute?.startsWith("thread") != true && overlayThreadNoteId == null && overlayTopicThreadNoteId == null
+    LaunchedEffect(currentRoute, overlayThreadNoteId, overlayTopicThreadNoteId) {
         if (!isMainScreen) {
             allowBottomNavVisible = false
         } else if (!allowBottomNavVisible) {
@@ -240,14 +266,21 @@ fun RibbitNavigation(
     // Initialize notifications persistence (SharedPreferences for seen IDs)
     LaunchedEffect(Unit) { NotificationsRepository.init(context) }
 
-    // Start notifications subscription and load anchor subscriptions when we have account + relays
+    // Start notifications subscription and load anchor subscriptions when we have account + relays.
+    // Retry until relay URLs are available (storage may not be loaded yet on first composition).
     val storageManager = remember { RelayStorageManager(context) }
     LaunchedEffect(currentAccount) {
         val pubkey = currentAccount?.toHexKey() ?: return@LaunchedEffect
         // Set current user pubkey so own events are displayed immediately in the feed
         NotesRepository.getInstance().setCurrentUserPubkey(pubkey)
-        val categories = storageManager.loadCategories(pubkey)
-        val allUserRelayUrls = categories.flatMap { it.relays }.map { it.url }.distinct()
+        // Retry up to 10 times (5 seconds total) waiting for relay categories to load
+        var allUserRelayUrls = emptyList<String>()
+        for (attempt in 1..10) {
+            val categories = storageManager.loadCategories(pubkey)
+            allUserRelayUrls = categories.flatMap { it.relays }.map { it.url }.distinct()
+            if (allUserRelayUrls.isNotEmpty()) break
+            kotlinx.coroutines.delay(500)
+        }
         if (allUserRelayUrls.isNotEmpty()) {
             val cacheUrls = storageManager.loadCacheRelays(pubkey).map { it.url }
             NotificationsRepository.setCacheRelayUrls(cacheUrls)
@@ -284,67 +317,70 @@ fun RibbitNavigation(
     }
 
     Scaffold(
+            contentWindowInsets = WindowInsets(0),
+
             bottomBar = {
                 if (showBottomNav && allowBottomNavVisible) {
                     ScrollAwareBottomNavigationBar(
-                            currentDestination = currentDestination,
-                            onDestinationClick = { destination ->
-                                when (destination) {
-                                    "home" -> {
-                                        if (currentDestination == "home") {
-                                            // Already on home feed - scroll to top only (no refresh)
-                                            coroutineScope.launch {
-                                                dashboardListState.animateScrollToItem(0)
-                                            }
-                                        } else {
-                                            navController.navigate("dashboard") {
-                                                popUpTo("dashboard") { inclusive = false }
-                                                launchSingleTop = true
-                                            }
+                        currentDestination = currentDestination,
+                        onDestinationClick = { destination ->
+                            when (destination) {
+                                "home" -> {
+                                    if (currentDestination == "home") {
+                                        coroutineScope.launch {
+                                            dashboardListState.animateScrollToItem(0)
+                                        }
+                                    } else {
+                                        navController.navigate("dashboard") {
+                                            popUpTo("dashboard") { inclusive = false }
+                                            launchSingleTop = true
                                         }
                                     }
-                                    "messages" -> {
-                                        /* No action - icon disabled */
-                                    }
-                                    "relays" ->
-                                            navController.navigate("relays") {
-                                                popUpTo("dashboard") { inclusive = false }
-                                                launchSingleTop = true
-                                            }
-                                    "topics" -> {
-                                            if (currentDestination == "topics") {
-                                                // Already on topics feed - scroll to top only (no refresh)
-                                                coroutineScope.launch {
-                                                    topicsListState.animateScrollToItem(0)
-                                                }
-                                            } else {
-                                                navController.navigate("topics") {
-                                                    popUpTo("dashboard") { inclusive = false }
-                                                    launchSingleTop = true
-                                                }
-                                            }
-                                        }
-                                    "notifications" ->
-                                            navController.navigate("notifications") {
-                                                popUpTo("dashboard") { inclusive = false }
-                                                launchSingleTop = true
-                                            }
-                                    "profile" ->
-                                            currentAccount?.toHexKey()?.let { pubkey ->
-                                                navController.navigateToProfile(pubkey)
-                                            } ?: run {
-                                                navController.navigate("dashboard")
-                                            }
                                 }
-                            },
-                            isVisible = true,
-                            notificationCount = notificationUnseenCount,
-                            topAppBarState = topAppBarState
+                                "messages" -> { /* TODO: Navigate to DMs when screen is ready */ }
+                                "wallet" ->
+                                    navController.navigate("wallet") {
+                                        popUpTo("dashboard") { inclusive = false }
+                                        launchSingleTop = true
+                                    }
+                                "relays" ->
+                                    navController.navigate("relays") {
+                                        popUpTo("dashboard") { inclusive = false }
+                                        launchSingleTop = true
+                                    }
+                                "topics" -> {
+                                    if (currentDestination == "topics") {
+                                        coroutineScope.launch {
+                                            topicsListState.animateScrollToItem(0)
+                                        }
+                                    } else {
+                                        navController.navigate("topics") {
+                                            popUpTo("dashboard") { inclusive = false }
+                                            launchSingleTop = true
+                                        }
+                                    }
+                                }
+                                "notifications" ->
+                                    navController.navigate("notifications") {
+                                        popUpTo("dashboard") { inclusive = false }
+                                        launchSingleTop = true
+                                    }
+                                "profile" ->
+                                    currentAccount?.toHexKey()?.let { pubkey ->
+                                        navController.navigateToProfile(pubkey)
+                                    } ?: run {
+                                        navController.navigate("dashboard")
+                                    }
+                            }
+                        },
+                        isVisible = true,
+                        notificationCount = notificationUnseenCount,
+                        topAppBarState = topAppBarState
                     )
                 }
             }
-    ) { paddingValues ->
-        Box(modifier = Modifier.fillMaxSize()) {
+    ) { scaffoldPadding ->
+        Box(modifier = Modifier.fillMaxSize().padding(top = scaffoldPadding.calculateTopPadding())) {
             NavHost(
                     navController = navController,
                     startDestination = "dashboard",
@@ -398,7 +434,11 @@ fun RibbitNavigation(
                     },
                     popEnterTransition = {
                         // Use MaterialFadeThrough for main screen transitions only
+                        val noAnimRoutes = setOf("image_viewer", "video_viewer", "reply_compose?rootId={rootId}&rootPubkey={rootPubkey}&parentId={parentId}&parentPubkey={parentPubkey}")
                         when {
+                            initialState.destination.route in noAnimRoutes -> {
+                                EnterTransition.None
+                            }
                             initialState.destination.route in mainScreenRoutes &&
                                     targetState.destination.route in mainScreenRoutes -> {
                                 fadeIn(animationSpec = tween(210, delayMillis = 90))
@@ -420,7 +460,11 @@ fun RibbitNavigation(
                     },
                     popExitTransition = {
                         // Use MaterialFadeThrough for main screen transitions only
+                        val noAnimRoutes = setOf("image_viewer", "video_viewer", "reply_compose?rootId={rootId}&rootPubkey={rootPubkey}&parentId={parentId}&parentPubkey={parentPubkey}")
                         when {
+                            initialState.destination.route in noAnimRoutes -> {
+                                ExitTransition.None
+                            }
                             initialState.destination.route in mainScreenRoutes &&
                                     targetState.destination.route in mainScreenRoutes -> {
                                 fadeOut(animationSpec = tween(90))
@@ -479,7 +523,16 @@ fun RibbitNavigation(
                                     screen == "messages" -> navController.navigate("messages")
                                     screen == "user_profile" -> currentAccount?.toHexKey()?.let { navController.navigateToProfile(it) }
                                     screen == "compose" -> navController.navigate("compose")
+                                    screen == "topics" -> navController.navigate("topics") {
+                                        popUpTo("dashboard") { inclusive = false }
+                                        launchSingleTop = true
+                                    }
                                     screen.startsWith("live_stream/") -> navController.navigate(screen)
+                                    screen == "live_explorer" -> navController.navigate("live_explorer") {
+                                        launchSingleTop = true
+                                    }
+                                    screen == "relay_discovery" -> navController.navigate("relay_discovery")
+                                    screen.startsWith("settings/") -> navController.navigate(screen)
                                 }
                             },
                             onThreadClick = { note, _ ->
@@ -488,12 +541,12 @@ fun RibbitNavigation(
                                     dashboardListState.firstVisibleItemScrollOffset
                                 )
                                 appViewModel.updateSelectedNote(note)
-                                appViewModel.updateThreadRelayUrls(null)
+                                appViewModel.updateThreadRelayUrls(note.relayUrls.ifEmpty { listOfNotNull(note.relayUrl) })
                                 overlayThreadNoteId = note.id
                             },
                             onImageTap = { note, _, _ ->
                                 appViewModel.updateSelectedNote(note)
-                                appViewModel.updateThreadRelayUrls(null)
+                                appViewModel.updateThreadRelayUrls(note.relayUrls.ifEmpty { listOfNotNull(note.relayUrl) })
                                 overlayThreadNoteId = note.id
                             },
                             onOpenImageViewer = { urls, index ->
@@ -521,7 +574,12 @@ fun RibbitNavigation(
                             },
                             initialTopAppBarState = topAppBarState,
                             isDashboardVisible = (currentRoute == "dashboard"),
-                            onQrClick = { navController.navigate("user_qr") }
+                            onQrClick = { navController.navigate("user_qr") },
+                            onSidebarSettingsClick = { navController.navigate("settings/relay_health") },
+                            onRelayClick = { relayUrl ->
+                                val encoded = android.net.Uri.encode(relayUrl)
+                                navController.navigate("relay_log/$encoded")
+                            }
                         )
 
                         // Intercept system back gesture when overlay thread is showing
@@ -552,7 +610,7 @@ fun RibbitNavigation(
                         ) {
                             if (contentNoteId != null && contentNote != null) {
                                 val noteId = contentNoteId
-                                val relayUrls = appState.threadRelayUrls?.takeIf { it.isNotEmpty() } ?: fallbackRelayUrls
+                                val relayUrls = ((appState.threadRelayUrls ?: emptyList()) + fallbackRelayUrls).distinct()
                                 val savedScrollState = threadStateHolder.getScrollState(noteId)
                                 val threadListState = rememberLazyListState(
                                     initialFirstVisibleItemIndex = savedScrollState.firstVisibleItemIndex,
@@ -592,6 +650,17 @@ fun RibbitNavigation(
                                         cacheRelayUrls = cacheRelayUrls,
                                         onBackClick = { overlayThreadNoteId = null },
                                         onProfileClick = { navController.navigateToProfile(it) },
+                                        onNoteClick = { clickedNote ->
+                                            // Store both the current overlay note and the clicked note
+                                            if (contentNote != null) appViewModel.storeNoteForThread(contentNote)
+                                            appViewModel.storeNoteForThread(clickedNote)
+                                            overlayThreadNoteId = null
+                                            // Push original thread onto backstack, then quoted thread on top
+                                            navController.navigate("thread/${contentNote!!.id}?replyKind=1") {
+                                                launchSingleTop = true
+                                            }
+                                            navController.navigate("thread/${clickedNote.id}?replyKind=1")
+                                        },
                                         onImageTap = { _, urls, idx ->
                                             appViewModel.openImageViewer(urls, idx)
                                             navController.navigate("image_viewer")
@@ -636,7 +705,11 @@ fun RibbitNavigation(
                                         onHeaderQrCodeClick = { navController.navigate("user_qr") },
                                         onHeaderSettingsClick = { navController.navigate("settings") },
                                         mediaPageForNote = { noteId -> appViewModel.getMediaPage(noteId) },
-                                        onMediaPageChanged = { noteId, page -> appViewModel.updateMediaPage(noteId, page) }
+                                        onMediaPageChanged = { noteId, page -> appViewModel.updateMediaPage(noteId, page) },
+                                        onRelayNavigate = { relayUrl ->
+                                            val encoded = android.net.Uri.encode(relayUrl)
+                                            navController.navigate("relay_log/$encoded")
+                                        }
                                     )
                                 }
                             }
@@ -679,9 +752,11 @@ fun RibbitNavigation(
                     val highlightReplyId = backStackEntry.arguments?.getString("highlightReplyId")
                     val context = LocalContext.current
 
-                    // Get note from AppViewModel's selected note; wait for async fetch (e.g. from notifications)
+                    // Get note from AppViewModel: try notesById map first (supports stacked threads),
+                    // then fall back to selectedNote (legacy callers like notifications)
                     val appState by appViewModel.appState.collectAsState()
-                    val note = appState.selectedNote?.takeIf { it.id == noteId }
+                    val note = appState.notesById[noteId]
+                        ?: appState.selectedNote?.takeIf { it.id == noteId }
                     if (note == null) {
                         // Show loading while waiting for the note to be fetched (e.g. notification → thread)
                         var waitElapsed by remember { mutableStateOf(0) }
@@ -726,7 +801,10 @@ fun RibbitNavigation(
                             }
                         } ?: emptyList()
                     }
-                    val relayUrls = appState.threadRelayUrls?.takeIf { it.isNotEmpty() } ?: fallbackRelayUrls
+                    val threadRelayUrls = appState.threadRelayUrls
+                    val relayUrls = remember(threadRelayUrls, fallbackRelayUrls) {
+                        ((threadRelayUrls ?: emptyList()) + fallbackRelayUrls).distinct()
+                    }
                     val cacheRelayUrls = remember(currentAccount) {
                         currentAccount?.toHexKey()?.let { pubkey ->
                             storageManager.loadCacheRelays(pubkey).map { it.url }
@@ -802,6 +880,11 @@ fun RibbitNavigation(
                                 // Navigate to profile - adds to backstack
                                 navController.navigateToProfile(authorId)
                             },
+                            onNoteClick = { clickedNote ->
+                                // Store note in map (doesn't overwrite selectedNote) and navigate
+                                appViewModel.storeNoteForThread(clickedNote)
+                                navController.navigate("thread/${clickedNote.id}?replyKind=1")
+                            },
                             onImageTap = { _, urls, idx ->
                                 appViewModel.openImageViewer(urls, idx)
                                 navController.navigate("image_viewer")
@@ -867,7 +950,11 @@ fun RibbitNavigation(
                             onHeaderQrCodeClick = { navController.navigate("user_qr") },
                             onHeaderSettingsClick = { navController.navigate("settings") },
                             mediaPageForNote = { noteId -> appViewModel.getMediaPage(noteId) },
-                            onMediaPageChanged = { noteId, page -> appViewModel.updateMediaPage(noteId, page) }
+                            onMediaPageChanged = { noteId, page -> appViewModel.updateMediaPage(noteId, page) },
+                            onRelayNavigate = { relayUrl ->
+                                val encoded = android.net.Uri.encode(relayUrl)
+                                navController.navigate("relay_log/$encoded")
+                            }
                     )
                     }
                 }
@@ -885,9 +972,9 @@ fun RibbitNavigation(
                 composable(
                     "image_viewer",
                     enterTransition = { fadeIn(animationSpec = tween(150)) },
-                    exitTransition = { fadeOut(animationSpec = tween(150)) },
+                    exitTransition = { ExitTransition.None },
                     popEnterTransition = { EnterTransition.None },
-                    popExitTransition = { fadeOut(animationSpec = tween(100)) }
+                    popExitTransition = { ExitTransition.None }
                 ) {
                     val appState by appViewModel.appState.collectAsState()
                     val urls = appState.imageViewerUrls
@@ -913,10 +1000,12 @@ fun RibbitNavigation(
                 composable(
                     "video_viewer",
                     enterTransition = { fadeIn(animationSpec = tween(150)) },
-                    exitTransition = { fadeOut(animationSpec = tween(150)) },
+                    exitTransition = { ExitTransition.None },
                     popEnterTransition = { EnterTransition.None },
-                    popExitTransition = { fadeOut(animationSpec = tween(100)) }
+                    popExitTransition = { ExitTransition.None }
                 ) {
+                    // Kill PiP when any media goes fullscreen
+                    LaunchedEffect(Unit) { PipStreamManager.kill() }
                     val appState by appViewModel.appState.collectAsState()
                     val urls = appState.videoViewerUrls
                     if (urls != null) {
@@ -931,12 +1020,56 @@ fun RibbitNavigation(
                     }
                 }
 
+                // NIP-53 Live broadcast explorer
+                composable(
+                    route = "live_explorer",
+                    enterTransition = {
+                        slideIntoContainer(
+                            towards = AnimatedContentTransitionScope.SlideDirection.Start,
+                            animationSpec = tween(300)
+                        )
+                    },
+                    popEnterTransition = {
+                        slideIntoContainer(
+                            towards = AnimatedContentTransitionScope.SlideDirection.End,
+                            animationSpec = tween(300)
+                        )
+                    },
+                    exitTransition = {
+                        slideOutOfContainer(
+                            towards = AnimatedContentTransitionScope.SlideDirection.Start,
+                            animationSpec = tween(300)
+                        )
+                    },
+                    popExitTransition = {
+                        slideOutOfContainer(
+                            towards = AnimatedContentTransitionScope.SlideDirection.End,
+                            animationSpec = tween(300)
+                        )
+                    }
+                ) {
+                    LiveExplorerScreen(
+                        onBackClick = { navController.popBackStack() },
+                        onActivityClick = { addressableId ->
+                            navController.navigate("live_stream/$addressableId") {
+                                launchSingleTop = true
+                            }
+                        }
+                    )
+                }
+
                 // NIP-53 Live Stream viewer
                 composable(
                     route = "live_stream/{addressableId}",
                     arguments = listOf(navArgument("addressableId") { type = NavType.StringType }),
                     enterTransition = {
                         slideIntoContainer(
+                            towards = AnimatedContentTransitionScope.SlideDirection.Start,
+                            animationSpec = tween(300)
+                        )
+                    },
+                    exitTransition = {
+                        slideOutOfContainer(
                             towards = AnimatedContentTransitionScope.SlideDirection.Start,
                             animationSpec = tween(300)
                         )
@@ -952,36 +1085,18 @@ fun RibbitNavigation(
                     LiveStreamScreen(
                         activityAddressableId = addressableId,
                         onBackClick = { navController.popBackStack() },
-                        onProfileClick = { authorId -> navController.navigateToProfile(authorId) }
+                        onProfileClick = { authorId -> navController.navigateToProfile(authorId) },
+                        onRelayNavigate = { relayUrl ->
+                            val encoded = android.net.Uri.encode(relayUrl)
+                            navController.navigate("relay_log/$encoded")
+                        }
                     )
                 }
 
                 // Profile view - Can navigate to threads and other profiles
                 composable(
                         route = "profile/{authorId}",
-                        arguments = listOf(navArgument("authorId") { type = NavType.StringType }),
-                        enterTransition = {
-                            // Override: Shared X-axis forward (no fade to prevent doubling)
-                            slideIntoContainer(
-                                    towards = AnimatedContentTransitionScope.SlideDirection.Start,
-                                    animationSpec = tween(300, easing = MaterialMotion.EasingStandardDecelerate)
-                            )
-                        },
-                        exitTransition = {
-                            // Override: No exit animation when going forward
-                            null
-                        },
-                        popEnterTransition = {
-                            // Override: No enter animation when coming back
-                            null
-                        },
-                        popExitTransition = {
-                            // Override: Shared X-axis back (no fade to prevent doubling)
-                            slideOutOfContainer(
-                                    towards = AnimatedContentTransitionScope.SlideDirection.End,
-                                    animationSpec = tween(300, easing = MaterialMotion.EasingStandardAccelerate)
-                            )
-                        }
+                        arguments = listOf(navArgument("authorId") { type = NavType.StringType })
                 ) { backStackEntry ->
                     val authorId =
                             backStackEntry.arguments?.getString("authorId") ?: return@composable
@@ -1017,7 +1132,7 @@ fun RibbitNavigation(
                     val profileListState = rememberLazyListState()
                     val followList = dashboardState.followList
                     val isFollowing = followList.isNotEmpty() && author.id.lowercase() in followList.map { it.lowercase() }.toSet()
-                    var profileRelayUrlToShowInfo by remember { mutableStateOf<String?>(null) }
+                    // Relay orb tap navigates to relay_log page via onRelayClick callback
                     val zapInProgressIds by accountStateViewModel.zapInProgressNoteIds.collectAsState()
                     val zappedIds by accountStateViewModel.zappedNoteIds.collectAsState()
                     val zappedAmountByNoteId by accountStateViewModel.zappedAmountByNoteId.collectAsState()
@@ -1067,7 +1182,10 @@ fun RibbitNavigation(
                             onProfileClick = { newAuthorId ->
                                 navController.navigateToProfile(newAuthorId)
                             },
-                            onRelayClick = { profileRelayUrlToShowInfo = it },
+                            onRelayClick = { relayUrl ->
+                                val encoded = android.net.Uri.encode(relayUrl)
+                                navController.navigate("relay_log/$encoded")
+                            },
                             onNavigateTo = { /* Not needed with NavController */ },
                             accountNpub = currentAccount?.npub,
                             isFollowing = isFollowing,
@@ -1089,12 +1207,7 @@ fun RibbitNavigation(
                             },
                             onMessageClick = { /* TODO: Open DM */ }
                     )
-                    profileRelayUrlToShowInfo?.let { url ->
-                        RelayInfoDialog(
-                            relayUrl = url,
-                            onDismiss = { profileRelayUrlToShowInfo = null }
-                        )
-                    }
+                    // Relay orb tap now navigates to relay_log page via onRelayClick callback
                 }
 
                 // User's own profile: resolve from ProfileMetadataCache so kind-0 shows when loaded
@@ -1148,7 +1261,7 @@ fun RibbitNavigation(
 
                     val userNotes = emptyList<com.example.views.data.Note>()
                     val userProfileListState = rememberLazyListState()
-                    var userProfileRelayUrlToShowInfo by remember { mutableStateOf<String?>(null) }
+                    // Relay orb tap navigates to relay_log page via onRelayClick callback
                     val userZapInProgressIds by accountStateViewModel.zapInProgressNoteIds.collectAsState()
                     val userZappedIds by accountStateViewModel.zappedNoteIds.collectAsState()
                     val userZappedAmountByNoteId by accountStateViewModel.zappedAmountByNoteId.collectAsState()
@@ -1198,19 +1311,17 @@ fun RibbitNavigation(
                             onProfileClick = { authorId ->
                                 navController.navigateToProfile(authorId)
                             },
-                            onRelayClick = { userProfileRelayUrlToShowInfo = it },
+                            onRelayClick = { relayUrl ->
+                                val encoded = android.net.Uri.encode(relayUrl)
+                                navController.navigate("relay_log/$encoded")
+                            },
                             accountNpub = currentAccount?.npub,
                             onNavigateTo = { /* Not needed with NavController */ },
                             isFollowing = false,
                             onFollowClick = { },
                             onMessageClick = { }
                     )
-                    userProfileRelayUrlToShowInfo?.let { url ->
-                        RelayInfoDialog(
-                            relayUrl = url,
-                            onDismiss = { userProfileRelayUrlToShowInfo = null }
-                        )
-                    }
+                    // Relay orb tap now navigates to relay_log page via onRelayClick callback
                 }
 
                 // Settings — feed and relay connections persist; no disconnect when visiting settings.
@@ -1224,6 +1335,7 @@ fun RibbitNavigation(
                                     "account_preferences" ->
                                             navController.navigate("settings/account_preferences")
                                     "about" -> navController.navigate("settings/about")
+                                    "relay_health" -> navController.navigate("settings/relay_health")
                                 }
                             },
                             onBugReportClick = {
@@ -1258,6 +1370,37 @@ fun RibbitNavigation(
                     AboutScreen(
                         onBackClick = { navController.popBackStack() },
                         onProfileClick = { pubkey -> navController.navigate("profile/$pubkey") }
+                    )
+                }
+
+                composable("settings/relay_health") {
+                    RelayHealthScreen(
+                        onBackClick = { navController.popBackStack() },
+                        onOpenRelayManager = { navController.navigate("relays") },
+                        onOpenRelayDiscovery = { navController.navigate("relay_discovery") },
+                        onOpenRelayLog = { relayUrl ->
+                            val encoded = android.net.Uri.encode(relayUrl)
+                            navController.navigate("relay_log/$encoded")
+                        }
+                    )
+                }
+
+                composable("wallet") {
+                    val walletSigner = accountStateViewModel.getCurrentSigner()
+                    val walletPubkey = accountStateViewModel.currentAccount.collectAsState().value?.toHexKey()
+                    com.example.views.ui.screens.WalletScreen(
+                        signer = walletSigner,
+                        pubkey = walletPubkey
+                    )
+                }
+
+                composable("relay_discovery") {
+                    RelayDiscoveryScreen(
+                        onBackClick = { navController.popBackStack() },
+                        onRelayClick = { relayUrl ->
+                            val encoded = android.net.Uri.encode(relayUrl)
+                            navController.navigate("relay_log/$encoded")
+                        }
                     )
                 }
 
@@ -1308,6 +1451,8 @@ fun RibbitNavigation(
                 composable("notifications") {
                     NotificationsScreen(
                             listState = notificationsListState,
+                            selectedTabIndex = notificationsSelectedTab,
+                            onTabSelected = { notificationsSelectedTab = it },
                             onBackClick = {
                                 navController.popBackStack()
                             },
@@ -1316,23 +1461,30 @@ fun RibbitNavigation(
                                 appViewModel.updateThreadRelayUrls(null)
                                 navController.navigateToThread(note.id, 1)
                             },
-                            onOpenThreadForRootId = { rootNoteId, replyKind, replyNoteId ->
-                                // Navigate immediately so thread screen appears without blocking on fetch
-                                navController.navigateToThread(rootNoteId, replyKind, replyNoteId)
-                                coroutineScope.launch(Dispatchers.IO) {
-                                    var note = NotesRepository.getInstance().getNoteFromCache(rootNoteId)
-                                    if (note == null) {
-                                        val pubkey = currentAccount?.toHexKey() ?: return@launch
-                                        val categories = storageManager.loadCategories(pubkey)
-                                        val relayUrls = categories.flatMap { it.relays }.map { it.url }.distinct()
-                                        if (relayUrls.isNotEmpty()) {
-                                            note = NotesRepository.getInstance().fetchNoteById(rootNoteId, relayUrls)
+                            onOpenThreadForRootId = { rootNoteId, replyKind, replyNoteId, targetNote ->
+                                // If we already have the root note (from notification fetch), set it immediately
+                                if (targetNote != null && targetNote.id == rootNoteId) {
+                                    appViewModel.updateSelectedNote(targetNote)
+                                    appViewModel.updateThreadRelayUrls(null)
+                                    navController.navigateToThread(rootNoteId, replyKind, replyNoteId)
+                                } else {
+                                    // Navigate immediately, fetch async
+                                    navController.navigateToThread(rootNoteId, replyKind, replyNoteId)
+                                    coroutineScope.launch(Dispatchers.IO) {
+                                        var note = NotesRepository.getInstance().getNoteFromCache(rootNoteId)
+                                        if (note == null) {
+                                            val pubkey = currentAccount?.toHexKey() ?: return@launch
+                                            val categories = storageManager.loadCategories(pubkey)
+                                            val relayUrls = categories.flatMap { it.relays }.map { it.url }.distinct()
+                                            if (relayUrls.isNotEmpty()) {
+                                                note = NotesRepository.getInstance().fetchNoteById(rootNoteId, relayUrls)
+                                            }
                                         }
-                                    }
-                                    if (note != null) {
-                                        withContext(Dispatchers.Main.immediate) {
-                                            appViewModel.updateSelectedNote(note)
-                                            appViewModel.updateThreadRelayUrls(null)
+                                        if (note != null) {
+                                            withContext(Dispatchers.Main.immediate) {
+                                                appViewModel.updateSelectedNote(note)
+                                                appViewModel.updateThreadRelayUrls(null)
+                                            }
                                         }
                                     }
                                 }
@@ -1347,36 +1499,191 @@ fun RibbitNavigation(
                     )
                 }
 
-                // Topics - Kind 11 topics with kind 1111 replies
+                // Topics - Kind 11 topics with kind 1111 replies (thread opens as overlay so feed stays visible for slide-back)
                 composable("topics") {
-                    TopicsScreen(
-                            onNavigateTo = { destination ->
-                                navController.navigate(destination)
-                            },
-                            onThreadClick = { note, relayUrls ->
-                                appViewModel.updateSelectedNote(note)
-                                appViewModel.updateThreadRelayUrls(relayUrls)
-                                navController.navigateToThread(note.id, 1111)
-                            },
-                            onProfileClick = { authorId ->
-                                navController.navigateToProfile(authorId)
-                            },
-                            listState = topicsListState,
-                            feedStateViewModel = feedStateViewModel,
-                            appViewModel = appViewModel,
-                            relayRepository = relayRepository,
-                            accountStateViewModel = accountStateViewModel,
-                            onLoginClick = {
-                                val loginIntent = accountStateViewModel.loginWithAmber()
-                                onAmberLogin(loginIntent)
-                            },
-                            initialTopAppBarState = topAppBarState,
-                            onQrClick = { navController.navigate("user_qr") },
-                            onNavigateToCreateTopic = { hashtag ->
-                                val encoded = android.net.Uri.encode(hashtag ?: "")
-                                navController.navigate("compose_topic?hashtag=$encoded")
+                    val appState by appViewModel.appState.collectAsState()
+                    val context = LocalContext.current
+                    val currentAccount by accountStateViewModel.currentAccount.collectAsState()
+                    val topicStorageManager = remember { com.example.views.repository.RelayStorageManager(context) }
+                    val topicFallbackRelayUrls = remember(currentAccount) {
+                        currentAccount?.toHexKey()?.let { pubkey ->
+                            val categories = topicStorageManager.loadCategories(pubkey)
+                            val subscribedRelays = categories.filter { it.isSubscribed }
+                                .flatMap { it.relays }.map { it.url }.distinct()
+                            subscribedRelays.ifEmpty {
+                                categories.flatMap { it.relays }.map { it.url }.distinct()
                             }
-                    )
+                        } ?: emptyList()
+                    }
+                    val topicCacheRelayUrls = remember(currentAccount) {
+                        currentAccount?.toHexKey()?.let { pubkey ->
+                            topicStorageManager.loadCacheRelays(pubkey).map { it.url }
+                        } ?: emptyList()
+                    }
+
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        TopicsScreen(
+                                onNavigateTo = { destination ->
+                                    if (destination == "dashboard") {
+                                        navController.navigate("dashboard") {
+                                            popUpTo("dashboard") { inclusive = true }
+                                            launchSingleTop = true
+                                        }
+                                    } else {
+                                        navController.navigate(destination)
+                                    }
+                                },
+                                onThreadClick = { note, relayUrls ->
+                                    appViewModel.updateSelectedNote(note)
+                                    appViewModel.updateThreadRelayUrls(relayUrls)
+                                    overlayTopicThreadNoteId = note.id
+                                },
+                                onProfileClick = { authorId ->
+                                    navController.navigateToProfile(authorId)
+                                },
+                                listState = topicsListState,
+                                feedStateViewModel = feedStateViewModel,
+                                appViewModel = appViewModel,
+                                relayRepository = relayRepository,
+                                accountStateViewModel = accountStateViewModel,
+                                onLoginClick = {
+                                    val loginIntent = accountStateViewModel.loginWithAmber()
+                                    onAmberLogin(loginIntent)
+                                },
+                                initialTopAppBarState = topAppBarState,
+                                onQrClick = { navController.navigate("user_qr") },
+                                onSidebarSettingsClick = { navController.navigate("settings/relay_health") },
+                                onNavigateToCreateTopic = { hashtag ->
+                                    val encoded = android.net.Uri.encode(hashtag ?: "")
+                                    navController.navigate("compose_topic?hashtag=$encoded")
+                                },
+                                onRelayClick = { relayUrl ->
+                                    val encoded = android.net.Uri.encode(relayUrl)
+                                    navController.navigate("relay_log/$encoded")
+                                }
+                        )
+
+                        // Intercept system back gesture when overlay thread is showing
+                        BackHandler(enabled = overlayTopicThreadNoteId != null) {
+                            overlayTopicThreadNoteId = null
+                        }
+
+                        // Thread overlay: feed stays underneath so slide-back reveals it
+                        val overlayNote = appState.selectedNote
+                        val showTopicOverlay = overlayTopicThreadNoteId != null && overlayNote != null && overlayNote.id == overlayTopicThreadNoteId
+                        var lastTopicOverlayNoteId by remember { mutableStateOf<String?>(null) }
+                        var lastTopicOverlayNote by remember { mutableStateOf<com.example.views.data.Note?>(null) }
+                        if (showTopicOverlay && overlayTopicThreadNoteId != null && overlayNote != null) {
+                            lastTopicOverlayNoteId = overlayTopicThreadNoteId
+                            lastTopicOverlayNote = overlayNote
+                        }
+                        val topicContentNoteId = if (showTopicOverlay) overlayTopicThreadNoteId else lastTopicOverlayNoteId
+                        val topicContentNote = if (showTopicOverlay) overlayNote else lastTopicOverlayNote
+                        AnimatedVisibility(
+                            visible = showTopicOverlay,
+                            enter = slideInHorizontally(
+                                animationSpec = tween(300, easing = MaterialMotion.EasingStandardDecelerate)
+                            ) { fullWidth -> fullWidth },
+                            exit = slideOutHorizontally(
+                                animationSpec = tween(300, easing = MaterialMotion.EasingStandardAccelerate)
+                            ) { fullWidth -> fullWidth }
+                        ) {
+                            if (topicContentNoteId != null && topicContentNote != null) {
+                                val noteId = topicContentNoteId
+                                val relayUrls = ((appState.threadRelayUrls ?: emptyList()) + topicFallbackRelayUrls).distinct()
+                                val savedScrollState = threadStateHolder.getScrollState(noteId)
+                                val threadListState = rememberLazyListState(
+                                    initialFirstVisibleItemIndex = savedScrollState.firstVisibleItemIndex,
+                                    initialFirstVisibleItemScrollOffset = savedScrollState.firstVisibleItemScrollOffset
+                                )
+                                val commentStates = threadStateHolder.getCommentStates(noteId)
+                                var expandedControlsCommentId by remember {
+                                    mutableStateOf(threadStateHolder.getExpandedControls(noteId))
+                                }
+                                var expandedControlsReplyId by remember {
+                                    mutableStateOf(threadStateHolder.getExpandedReplyControls(noteId))
+                                }
+                                val threadTopAppBarState = rememberTopAppBarState()
+                                val authState by accountStateViewModel.authState.collectAsState()
+                                DisposableEffect(noteId) {
+                                    onDispose {
+                                        threadStateHolder.saveScrollState(noteId, threadListState)
+                                        threadStateHolder.setExpandedControls(noteId, expandedControlsCommentId)
+                                        threadStateHolder.setExpandedReplyControls(noteId, expandedControlsReplyId)
+                                    }
+                                }
+                                ThreadSlideBackBox(onBack = { overlayTopicThreadNoteId = null }) {
+                                    ModernThreadViewScreen(
+                                        note = topicContentNote,
+                                        comments = emptyList(),
+                                        listState = threadListState,
+                                        commentStates = commentStates,
+                                        expandedControlsCommentId = expandedControlsCommentId,
+                                        onExpandedControlsChange = { expandedControlsCommentId = if (expandedControlsCommentId == it) null else it },
+                                        expandedControlsReplyId = expandedControlsReplyId,
+                                        onExpandedControlsReplyChange = { replyId ->
+                                            expandedControlsReplyId = if (expandedControlsReplyId == replyId) null else replyId
+                                        },
+                                        topAppBarState = threadTopAppBarState,
+                                        replyKind = 1111,
+                                        relayUrls = relayUrls,
+                                        cacheRelayUrls = topicCacheRelayUrls,
+                                        onBackClick = { overlayTopicThreadNoteId = null },
+                                        onProfileClick = { navController.navigateToProfile(it) },
+                                        onImageTap = { _, urls, idx ->
+                                            appViewModel.openImageViewer(urls, idx)
+                                            navController.navigate("image_viewer")
+                                        },
+                                        onOpenImageViewer = { urls, idx ->
+                                            appViewModel.openImageViewer(urls, idx)
+                                            navController.navigate("image_viewer")
+                                        },
+                                        onVideoClick = { urls, idx ->
+                                            appViewModel.openVideoViewer(urls, idx)
+                                            navController.navigate("video_viewer")
+                                        },
+                                        onReact = { note, emoji ->
+                                            val error = accountStateViewModel.sendReaction(note, emoji)
+                                            if (error != null) Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                                        },
+                                        onCustomZapSend = { note, amount, zapType, msg ->
+                                            val err = accountStateViewModel.sendZap(note, amount, zapType, msg)
+                                            if (err != null) Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                        },
+                                        onZap = { nId, amount ->
+                                            if (topicContentNote != null && topicContentNote.id == nId) {
+                                                val err = accountStateViewModel.sendZap(topicContentNote, amount, com.example.views.repository.ZapType.PUBLIC, "")
+                                                if (err != null) Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        zapInProgressNoteIds = accountStateViewModel.zapInProgressNoteIds.collectAsState().value,
+                                        zappedNoteIds = accountStateViewModel.zappedNoteIds.collectAsState().value,
+                                        myZappedAmountByNoteId = accountStateViewModel.zappedAmountByNoteId.collectAsState().value,
+                                        onLoginClick = {
+                                            val loginIntent = accountStateViewModel.loginWithAmber()
+                                            onAmberLogin(loginIntent)
+                                        },
+                                        isGuest = authState.isGuest,
+                                        userDisplayName = authState.userProfile?.displayName ?: authState.userProfile?.name,
+                                        userAvatarUrl = authState.userProfile?.picture,
+                                        accountNpub = currentAccount?.npub,
+                                        onHeaderProfileClick = {
+                                            authState.userProfile?.pubkey?.let { navController.navigateToProfile(it) }
+                                        },
+                                        onHeaderAccountsClick = { },
+                                        onHeaderQrCodeClick = { navController.navigate("user_qr") },
+                                        onHeaderSettingsClick = { navController.navigate("settings") },
+                                        mediaPageForNote = { noteId -> appViewModel.getMediaPage(noteId) },
+                                        onMediaPageChanged = { noteId, page -> appViewModel.updateMediaPage(noteId, page) },
+                                        onRelayNavigate = { relayUrl ->
+                                            val encoded = android.net.Uri.encode(relayUrl)
+                                            navController.navigate("relay_log/$encoded")
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Topic Thread - View kind:11 topic with kind:1 replies
@@ -1384,7 +1691,21 @@ fun RibbitNavigation(
                     route = "topic_thread/{topicId}",
                     arguments = listOf(
                         navArgument("topicId") { type = NavType.StringType }
-                    )
+                    ),
+                    enterTransition = {
+                        slideIntoContainer(
+                            towards = AnimatedContentTransitionScope.SlideDirection.Start,
+                            animationSpec = tween(300, easing = MaterialMotion.EasingStandardDecelerate)
+                        )
+                    },
+                    exitTransition = { null },
+                    popEnterTransition = { null },
+                    popExitTransition = {
+                        slideOutOfContainer(
+                            towards = AnimatedContentTransitionScope.SlideDirection.End,
+                            animationSpec = tween(300, easing = MaterialMotion.EasingStandardAccelerate)
+                        )
+                    }
                 ) { backStackEntry ->
                     val topicId = backStackEntry.arguments?.getString("topicId") ?: return@composable
                     val topicsRepository = remember { com.example.views.repository.TopicsRepository.getInstance(context) }
@@ -1521,7 +1842,9 @@ fun RibbitNavigation(
                         navArgument("rootPubkey") { type = NavType.StringType },
                         navArgument("parentId") { type = NavType.StringType; defaultValue = "" },
                         navArgument("parentPubkey") { type = NavType.StringType; defaultValue = "" }
-                    )
+                    ),
+                    popExitTransition = { ExitTransition.None },
+                    popEnterTransition = { EnterTransition.None }
                 ) { backStackEntry ->
                     val appState by appViewModel.appState.collectAsState()
                     val rootId = backStackEntry.arguments?.getString("rootId") ?: return@composable
@@ -1545,12 +1868,13 @@ fun RibbitNavigation(
                 }
             }
 
-            // PiP mini-player overlay — floats above all screens
+            // PiP mini-player overlay — floats above all screens (zIndex ensures it stays above media)
             PipStreamOverlay(
                 onTapToReturn = { addressableId ->
                     val encoded = android.net.Uri.encode(addressableId)
                     navController.navigate("live_stream/$encoded")
-                }
+                },
+                modifier = Modifier.zIndex(Float.MAX_VALUE)
             )
         }
     }

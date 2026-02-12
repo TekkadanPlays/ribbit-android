@@ -10,6 +10,7 @@ import com.example.views.repository.NotesRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 @Immutable
@@ -66,11 +67,7 @@ class AnnouncementsViewModel : ViewModel() {
             mediaUrls = emptyList()
         )
 
-        _uiState.value = _uiState.value.copy(
-            announcements = listOf(sampleAnnouncement),
-            isLoading = false,
-            hasRelay = false
-        )
+        _uiState.update { it.copy(announcements = listOf(sampleAnnouncement), isLoading = false, hasRelay = false) }
     }
 
     private fun observeNotesFromRepository() {
@@ -78,29 +75,21 @@ class AnnouncementsViewModel : ViewModel() {
             notesRepository.notes.collect { notes ->
                 // If we have real notes, use those instead of sample
                 if (notes.isNotEmpty()) {
-                    _uiState.value = _uiState.value.copy(
-                        announcements = notes,
-                        isLoading = false,
-                        hasRelay = true
-                    )
+                    _uiState.update { it.copy(announcements = notes, isLoading = false, hasRelay = true) }
                 }
             }
         }
 
         viewModelScope.launch {
             notesRepository.isLoading.collect { isLoading ->
-                _uiState.value = _uiState.value.copy(
-                    isLoading = isLoading
-                )
+                _uiState.update { it.copy(isLoading = isLoading) }
             }
         }
 
         viewModelScope.launch {
             notesRepository.error.collect { error ->
                 if (error != null) {
-                    _uiState.value = _uiState.value.copy(
-                        error = error
-                    )
+                    _uiState.update { it.copy(error = error) }
                 }
             }
         }
@@ -136,10 +125,7 @@ class AnnouncementsViewModel : ViewModel() {
         }
 
         Log.d(TAG, "Loading announcements from $relay for author ${pubkey.take(8)}...")
-        _uiState.value = _uiState.value.copy(
-            hasRelay = true,
-            isLoading = true
-        )
+        _uiState.update { it.copy(hasRelay = true, isLoading = true) }
 
         viewModelScope.launch {
             try {
@@ -152,20 +138,14 @@ class AnnouncementsViewModel : ViewModel() {
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading announcements: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(
-                    error = "Failed to load announcements: ${e.message}",
-                    isLoading = false
-                )
+                _uiState.update { it.copy(error = "Failed to load announcements: ${e.message}", isLoading = false) }
             }
         }
     }
 
     private fun loadFromDefaultRelay(relay: String) {
         Log.d(TAG, "Loading from default relay: $relay")
-        _uiState.value = _uiState.value.copy(
-            hasRelay = true,
-            isLoading = true
-        )
+        _uiState.update { it.copy(hasRelay = true, isLoading = true) }
 
         viewModelScope.launch {
             try {
@@ -174,10 +154,7 @@ class AnnouncementsViewModel : ViewModel() {
                 notesRepository.subscribeToNotes(limit = 50)
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading from default relay: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(
-                    error = "Failed to load: ${e.message}",
-                    isLoading = false
-                )
+                _uiState.update { it.copy(error = "Failed to load: ${e.message}", isLoading = false) }
             }
         }
     }

@@ -3,7 +3,9 @@ package com.example.views.cache
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -48,6 +50,13 @@ class Nip11CacheManager(private val context: Context) {
     
     // In-memory cache for fast access
     private val memoryCache = mutableMapOf<String, CachedRelayInfo>()
+
+    // In-flight deduplication: only one network fetch per URL at a time
+    private val inFlight = java.util.concurrent.ConcurrentHashMap<String, Deferred<RelayInformation?>>()
+
+    // Failed URL cooldown (5 min) to avoid hammering relays that consistently fail
+    private val failedUrls = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val FAIL_COOLDOWN_MS = 5 * 60 * 1000L
     
     init {
         loadCacheFromStorage()
@@ -59,7 +68,7 @@ class Nip11CacheManager(private val context: Context) {
     suspend fun getRelayInfo(url: String, forceRefresh: Boolean = false): RelayInformation? = withContext(Dispatchers.IO) {
         try {
             val normalizedUrl = normalizeRelayUrl(url)
-            
+
             // Check if we have valid cached data
             if (!forceRefresh) {
                 val cached = memoryCache[normalizedUrl]
@@ -68,18 +77,46 @@ class Nip11CacheManager(private val context: Context) {
                     return@withContext cached.info
                 }
             }
-            
-            // Fetch fresh data
-            Log.d(TAG, "🌐 Fetching fresh NIP-11 data for $normalizedUrl")
-            val freshInfo = fetchRelayInfoFromNetwork(normalizedUrl)
-            
-            // Cache the result
-            if (freshInfo != null) {
-                cacheRelayInfo(normalizedUrl, freshInfo)
+
+            // Skip URLs that recently failed (cooldown)
+            if (!forceRefresh) {
+                val failedAt = failedUrls[normalizedUrl]
+                if (failedAt != null && System.currentTimeMillis() - failedAt < FAIL_COOLDOWN_MS) {
+                    return@withContext memoryCache[normalizedUrl]?.info
+                }
             }
-            
-            freshInfo
-            
+
+            // Deduplicate concurrent fetches: if another coroutine is already fetching, wait for it
+            val existing = inFlight[normalizedUrl]
+            if (existing != null) {
+                return@withContext try { existing.await() } catch (_: Exception) { null }
+            }
+
+            val deferred = CompletableDeferred<RelayInformation?>()
+            val prev = inFlight.putIfAbsent(normalizedUrl, deferred)
+            if (prev != null) {
+                // Another coroutine won the race
+                return@withContext try { prev.await() } catch (_: Exception) { null }
+            }
+
+            try {
+                Log.d(TAG, "🌐 Fetching fresh NIP-11 data for $normalizedUrl")
+                val freshInfo = fetchRelayInfoFromNetwork(normalizedUrl)
+                if (freshInfo != null) {
+                    cacheRelayInfo(normalizedUrl, freshInfo)
+                    failedUrls.remove(normalizedUrl)
+                } else {
+                    failedUrls[normalizedUrl] = System.currentTimeMillis()
+                }
+                deferred.complete(freshInfo)
+                freshInfo
+            } catch (e: Exception) {
+                failedUrls[normalizedUrl] = System.currentTimeMillis()
+                deferred.completeExceptionally(e)
+                null
+            } finally {
+                inFlight.remove(normalizedUrl)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "⚠️ Failed to get relay info for $url: ${e.message}")
             null

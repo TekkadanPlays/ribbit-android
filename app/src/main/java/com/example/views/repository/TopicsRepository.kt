@@ -9,6 +9,7 @@ import com.example.views.data.Note
 import com.example.views.relay.RelayConnectionStateMachine
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
 import com.vitorpamplona.quartz.nip01Core.core.Event
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -96,7 +97,7 @@ data class HashtagStats(
 class TopicsRepository private constructor(context: Context) {
 
     private val appContext: Context = context.applicationContext
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, t -> Log.e(TAG, "Coroutine failed: ${t.message}", t) })
     private val relayStateMachine = RelayConnectionStateMachine.getInstance()
     private val profileCache = ProfileMetadataCache.getInstance()
 

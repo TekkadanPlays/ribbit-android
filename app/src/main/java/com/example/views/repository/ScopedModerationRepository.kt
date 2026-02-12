@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.example.views.relay.RelayConnectionStateMachine
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,7 +38,7 @@ class ScopedModerationRepository private constructor() {
         val timestamp: Long
     )
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, t -> Log.e(TAG, "Coroutine failed: ${t.message}", t) })
 
     // All moderation events indexed by ID (dedup)
     private val allEvents = mutableMapOf<String, ModerationEvent>()

@@ -4,6 +4,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +17,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import com.example.views.ui.components.cutoutPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -64,11 +68,30 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.ui.text.input.ImeAction
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.outlined.Router
 import com.example.views.data.LiveActivity
 import com.example.views.data.LiveActivityStatus
+import com.example.views.data.LiveChatMessage
 import com.example.views.repository.LiveActivityRepository
+import com.example.views.repository.LiveChatRepository
+import com.example.views.repository.ProfileMetadataCache
 import com.example.views.ui.components.LiveStatusDot
 import com.example.views.ui.components.PipStreamManager
+import com.example.views.ui.components.RelayOrbs
+import com.example.views.viewmodel.AccountStateViewModel
 
 /**
  * NIP-53 Live Stream viewer screen.
@@ -82,7 +105,9 @@ fun LiveStreamScreen(
     activityAddressableId: String,
     onBackClick: () -> Unit,
     onProfileClick: (String) -> Unit = {},
-    modifier: Modifier = Modifier
+    onRelayNavigate: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
+    accountStateViewModel: AccountStateViewModel = viewModel()
 ) {
     val decodedId = remember(activityAddressableId) { Uri.decode(activityAddressableId) }
     val repository = remember { LiveActivityRepository.getInstance() }
@@ -93,14 +118,17 @@ fun LiveStreamScreen(
         // Activity not found or expired — show placeholder and allow back
         Scaffold(
             topBar = {
-                TopAppBar(
-                    title = { Text("Live Stream") },
-                    navigationIcon = {
-                        IconButton(onClick = onBackClick) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                        }
-                    }
-                )
+                Column(Modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
+                    TopAppBar(
+                        title = { Text("Live Stream") },
+                        navigationIcon = {
+                            IconButton(onClick = onBackClick) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                            }
+                        },
+                        windowInsets = WindowInsets(0)
+                    )
+                }
             }
         ) { padding ->
             Box(
@@ -126,6 +154,13 @@ fun LiveStreamScreen(
             }
         }
         return
+    }
+
+    // Kill existing PiP if opening a *different* stream (prevents double-play)
+    LaunchedEffect(decodedId) {
+        if (PipStreamManager.isActive && !PipStreamManager.isActiveFor(decodedId)) {
+            PipStreamManager.kill()
+        }
     }
 
     // --- Hoisted ExoPlayer: created at screen level so we can hand it off to PiP ---
@@ -227,6 +262,25 @@ fun LiveStreamScreen(
         }
     }
 
+    // ── Relay orb tap navigates to relay log page via onRelayNavigate callback ──
+
+    // ── Chat relay selector: default all activity relays enabled ──
+    var chatRelayEnabled by remember(activity.relayUrls) {
+        mutableStateOf(activity.relayUrls.associateWith { true })
+    }
+    val enabledChatRelays = chatRelayEnabled.filter { it.value }.keys
+
+    // ── Live Chat (kind:1311) ──
+    val chatRepository = remember { LiveChatRepository.getInstance() }
+    val chatMessages by chatRepository.messages.collectAsState()
+
+    // Subscribe to chat messages for this activity
+    val activityAddress = remember(activity) { "30311:${activity.hostPubkey}:${activity.dTag}" }
+    DisposableEffect(activityAddress, activity.relayUrls) {
+        chatRepository.subscribe(activityAddress, activity.relayUrls)
+        onDispose { chatRepository.unsubscribe() }
+    }
+
     // Back handler: hand off player to PiP if stream is playing, then navigate back
     val handleBack = {
         if (player != null && hasReceivedVideo && !showUnavailable) {
@@ -245,83 +299,199 @@ fun LiveStreamScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        LiveStatusDot(status = activity.status)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = activity.title ?: "Live Stream",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = { handleBack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+            Column(Modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            LiveStatusDot(status = activity.status)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = activity.title ?: "Live Stream",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = { handleBack() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                        }
+                    },
+                    actions = {
+                        if (activity.relayUrls.isNotEmpty()) {
+                            RelayOrbs(
+                                relayUrls = activity.relayUrls,
+                                onRelayClick = { url -> onRelayNavigate(url) },
+                                modifier = Modifier.padding(end = 12.dp)
+                            )
+                        }
+                    },
+                    windowInsets = WindowInsets(0),
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
                 )
-            )
+            }
         },
         modifier = modifier
     ) { padding ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Video player
-            item(key = "player") {
-                LiveStreamPlayerView(
-                    player = player,
-                    showUnavailable = showUnavailable,
-                    playerError = playerError,
-                    activity = activity,
-                    onPipClick = { handleBack() }
-                )
-            }
+            // ── Top section: video + stream info (not scrollable, fixed) ──
+            LiveStreamPlayerView(
+                player = player,
+                showUnavailable = showUnavailable,
+                playerError = playerError,
+                activity = activity,
+                onPipClick = { handleBack() }
+            )
 
-            // Stream info
-            item(key = "info") {
-                LiveStreamInfo(
-                    activity = activity,
-                    onProfileClick = onProfileClick
-                )
-            }
-
-            // Chat placeholder
-            item(key = "chat_header") {
-                Text(
-                    text = "Live Chat",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                )
-            }
-
-            item(key = "chat_placeholder") {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp)
-                        .padding(horizontal = 16.dp)
-                        .background(
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                            MaterialTheme.shapes.medium
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "Kind 1311 live chat coming soon",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            // Compact stream info row: host avatar, name, status, viewer count
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (activity.hostAuthor?.avatarUrl != null) {
+                    AsyncImage(
+                        model = activity.hostAuthor.avatarUrl,
+                        contentDescription = "Host",
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .clickable { onProfileClick(activity.hostPubkey) },
+                        contentScale = ContentScale.Crop
                     )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable { onProfileClick(activity.hostPubkey) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = activity.hostAuthor?.displayName ?: activity.hostAuthor?.username ?: activity.hostPubkey.take(12) + "…",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = activity.status.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = when (activity.status) {
+                                LiveActivityStatus.LIVE -> Color(0xFFEF4444)
+                                LiveActivityStatus.PLANNED -> Color(0xFFF59E0B)
+                                LiveActivityStatus.ENDED -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                        activity.currentParticipants?.let { count ->
+                            if (count > 0) {
+                                Text(
+                                    text = "$count watching",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
             }
+
+            // Summary / description (if provided)
+            if (!activity.summary.isNullOrBlank()) {
+                Text(
+                    text = activity.summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+
+            // ── Chat section: fills remaining space ──
+            // Chat header
+            Text(
+                text = "Live Chat",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+
+            // Chat messages — reversed so newest are at the bottom
+            val chatListState = rememberLazyListState()
+
+            // Auto-scroll to bottom when new messages arrive
+            LaunchedEffect(chatMessages.size) {
+                if (chatMessages.isNotEmpty()) {
+                    chatListState.animateScrollToItem(chatMessages.lastIndex)
+                }
+            }
+
+            Box(modifier = Modifier.weight(1f)) {
+                if (chatMessages.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (activity.status == LiveActivityStatus.LIVE) "No messages yet — be the first!" else "Chat is not active",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        state = chatListState,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(
+                            items = chatMessages,
+                            key = { it.id }
+                        ) { message ->
+                            LiveChatMessageRow(
+                                message = message,
+                                onProfileClick = onProfileClick
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Chat input — pinned at bottom
+            LiveChatInput(
+                onSend = { text ->
+                    val addr = "30311:${activity.hostPubkey}:${activity.dTag}"
+                    accountStateViewModel.publishLiveChatMessage(text, addr, enabledChatRelays)
+                },
+                enabled = activity.status == LiveActivityStatus.LIVE,
+                relayUrls = activity.relayUrls,
+                relayEnabled = chatRelayEnabled,
+                onRelayToggle = { url ->
+                    chatRelayEnabled = chatRelayEnabled.toMutableMap().apply {
+                        this[url] = !(this[url] ?: true)
+                    }
+                },
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+            )
         }
     }
 }
@@ -577,6 +747,199 @@ private fun LiveStreamInfo(
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * A single chat message row: avatar, display name, and message content.
+ */
+@Composable
+private fun LiveChatMessageRow(
+    message: LiveChatMessage,
+    onProfileClick: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val profileCache = remember { ProfileMetadataCache.getInstance() }
+    val author = message.author ?: profileCache.getAuthor(message.pubkey)
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        // Avatar
+        if (author?.avatarUrl != null) {
+            AsyncImage(
+                model = author.avatarUrl,
+                contentDescription = "Avatar",
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .clickable { onProfileClick(message.pubkey) },
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable { onProfileClick(message.pubkey) },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Person,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Spacer(Modifier.width(8.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = author?.displayName ?: author?.username ?: message.pubkey.take(8) + "…",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = message.content,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
+}
+
+/**
+ * Chat input field with relay selector button (left) and send button (right).
+ * The relay button opens a dropdown showing each relay with a checkbox toggle.
+ */
+@Composable
+private fun LiveChatInput(
+    onSend: (String) -> Unit,
+    enabled: Boolean,
+    relayUrls: List<String>,
+    relayEnabled: Map<String, Boolean>,
+    onRelayToggle: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var text by remember { mutableStateOf("") }
+    var showRelayMenu by remember { mutableStateOf(false) }
+    val enabledCount = relayEnabled.count { it.value }
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Relay selector button
+        Box {
+            IconButton(
+                onClick = { showRelayMenu = true },
+                enabled = enabled,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.Router,
+                    contentDescription = "Select relays ($enabledCount/${relayUrls.size})",
+                    tint = if (enabledCount == relayUrls.size)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            DropdownMenu(
+                expanded = showRelayMenu,
+                onDismissRequest = { showRelayMenu = false }
+            ) {
+                relayUrls.forEach { url ->
+                    val isEnabled = relayEnabled[url] ?: true
+                    val displayName = url
+                        .removePrefix("wss://")
+                        .removePrefix("ws://")
+                        .trimEnd('/')
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = isEnabled,
+                                    onCheckedChange = { onRelayToggle(url) }
+                                )
+                                Text(
+                                    text = displayName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        },
+                        onClick = { onRelayToggle(url) }
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.width(4.dp))
+
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            modifier = Modifier.weight(1f),
+            placeholder = {
+                Text(
+                    if (enabled) "Say something…" else "Chat unavailable",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            enabled = enabled,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodySmall,
+            shape = RoundedCornerShape(24.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+            ),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(
+                onSend = {
+                    if (text.isNotBlank() && enabledCount > 0) {
+                        onSend(text.trim())
+                        text = ""
+                    }
+                }
+            )
+        )
+
+        Spacer(Modifier.width(4.dp))
+
+        IconButton(
+            onClick = {
+                if (text.isNotBlank() && enabledCount > 0) {
+                    onSend(text.trim())
+                    text = ""
+                }
+            },
+            enabled = enabled && text.isNotBlank() && enabledCount > 0,
+            modifier = Modifier.size(36.dp)
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.Send,
+                contentDescription = "Send",
+                tint = if (enabled && text.isNotBlank() && enabledCount > 0)
+                    MaterialTheme.colorScheme.primary
+                else
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.size(20.dp)
             )
         }
     }

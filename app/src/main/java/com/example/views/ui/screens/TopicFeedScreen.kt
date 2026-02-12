@@ -1,7 +1,9 @@
 package com.example.views.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import com.example.views.ui.components.cutoutPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -72,12 +74,14 @@ fun TopicFeedScreen(
     val topics = uiState.topicsForSelectedHashtag
 
     // Register topic IDs with NoteCountsRepository for reaction/zap counts
-    val topicIds = remember(topics) { topics.map { it.id }.toSet() }
-    LaunchedEffect(topicIds) {
-        com.example.views.repository.NoteCountsRepository.setTopicNoteIdsOfInterest(topicIds)
+    val topicNoteRelays = remember(topics) {
+        topics.associate { it.id to (it.relayUrls.ifEmpty { listOfNotNull(it.relayUrl) }) }
+    }
+    LaunchedEffect(topicNoteRelays) {
+        com.example.views.repository.NoteCountsRepository.setTopicNoteIdsOfInterest(topicNoteRelays)
     }
     DisposableEffect(Unit) {
-        onDispose { com.example.views.repository.NoteCountsRepository.setTopicNoteIdsOfInterest(emptySet()) }
+        onDispose { com.example.views.repository.NoteCountsRepository.setTopicNoteIdsOfInterest(emptyMap()) }
     }
     val noteCountsByNoteId by com.example.views.repository.NoteCountsRepository.countsByNoteId.collectAsState()
 
@@ -86,53 +90,56 @@ fun TopicFeedScreen(
             .fillMaxSize()
             .nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "#$hashtag",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowBack,
-                            contentDescription = "Back",
-                            tint = MaterialTheme.colorScheme.onSurface
+            Column(Modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = "#$hashtag",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
-                    }
-                },
-                actions = {
-                    IconButton(
-                        onClick = {
-                            val error = if (isSubscribed) {
-                                accountStateViewModel.unsubscribeFromAnchor(anchor)
-                            } else {
-                                accountStateViewModel.subscribeToAnchor(anchor)
-                            }
-                            if (error != null) {
-                                Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
-                            } else {
-                                val message = if (isSubscribed) "Unsubscribed from #$hashtag" else "Subscribed to #$hashtag"
-                                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                            }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBackClick) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowBack,
+                                contentDescription = "Back",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
                         }
-                    ) {
-                        Icon(
-                            imageVector = if (isSubscribed) Icons.Default.BookmarkAdded else Icons.Default.BookmarkAdd,
-                            contentDescription = if (isSubscribed) "Unsubscribe" else "Subscribe",
-                            tint = if (isSubscribed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                },
-                scrollBehavior = scrollBehavior,
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surface
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = {
+                                val error = if (isSubscribed) {
+                                    accountStateViewModel.unsubscribeFromAnchor(anchor)
+                                } else {
+                                    accountStateViewModel.subscribeToAnchor(anchor)
+                                }
+                                if (error != null) {
+                                    Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val message = if (isSubscribed) "Unsubscribed from #$hashtag" else "Subscribed to #$hashtag"
+                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = if (isSubscribed) Icons.Default.BookmarkAdded else Icons.Default.BookmarkAdd,
+                                contentDescription = if (isSubscribed) "Unsubscribe" else "Subscribe",
+                                tint = if (isSubscribed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    },
+                    scrollBehavior = scrollBehavior,
+                    windowInsets = WindowInsets(0),
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        scrolledContainerColor = MaterialTheme.colorScheme.surface
+                    )
                 )
-            )
+            }
         }
     ) { paddingValues ->
         PullToRefreshBox(
@@ -204,13 +211,18 @@ fun TopicFeedScreen(
                         val totalReplyCount = topic.replyCount + kind1ReplyCount
                         
                         val counts = noteCountsByNoteId[topic.id]
+                        val topicIsFavorited = anchor in subscribedAnchors
                         TopicCard(
                             topic = topic.copy(replyCount = totalReplyCount),
-                            isFavorited = false, // TODO: Track favorites
+                            isFavorited = topicIsFavorited,
                             reactions = counts?.reactions ?: emptyList(),
                             zapCount = counts?.zapCount ?: 0,
                             onToggleFavorite = {
-                                // TODO: Implement favorite
+                                if (topicIsFavorited) {
+                                    accountStateViewModel.unsubscribeFromAnchor(anchor)
+                                } else {
+                                    accountStateViewModel.subscribeToAnchor(anchor)
+                                }
                             },
                             onMenuClick = {
                                 // TODO: Show menu

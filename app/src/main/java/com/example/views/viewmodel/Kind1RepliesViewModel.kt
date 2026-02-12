@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 @Immutable
@@ -48,10 +49,26 @@ class Kind1RepliesViewModel : ViewModel() {
         private const val TAG = "Kind1RepliesViewModel"
     }
 
+    /** Debounced profile update: batch pubkeys for 100ms then apply all at once. */
+    private val pendingProfileUpdates = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private var profileUpdateFlushJob: kotlinx.coroutines.Job? = null
+    private val PROFILE_UPDATE_DEBOUNCE_MS = 100L
+
     init {
         observeRepliesFromRepository()
         ProfileMetadataCache.getInstance().profileUpdated
-            .onEach { pubkey -> repository.updateAuthorInReplies(pubkey) }
+            .onEach { pubkey ->
+                pendingProfileUpdates.add(pubkey.lowercase())
+                profileUpdateFlushJob?.cancel()
+                profileUpdateFlushJob = viewModelScope.launch {
+                    kotlinx.coroutines.delay(PROFILE_UPDATE_DEBOUNCE_MS)
+                    val batch = synchronized(pendingProfileUpdates) {
+                        pendingProfileUpdates.toSet().also { pendingProfileUpdates.clear() }
+                    }
+                    if (batch.isEmpty()) return@launch
+                    repository.updateAuthorsInRepliesBatch(batch)
+                }
+            }
             .launchIn(viewModelScope)
     }
 
@@ -81,14 +98,14 @@ class Kind1RepliesViewModel : ViewModel() {
 
         viewModelScope.launch {
             repository.isLoading.collect { isLoading ->
-                _uiState.value = _uiState.value.copy(isLoading = isLoading)
+                _uiState.update { it.copy(isLoading = isLoading) }
             }
         }
 
         viewModelScope.launch {
             repository.error.collect { error ->
                 if (error != null) {
-                    _uiState.value = _uiState.value.copy(error = error)
+                    _uiState.update { it.copy(error = error) }
                 }
             }
         }
@@ -107,41 +124,44 @@ class Kind1RepliesViewModel : ViewModel() {
             Log.d(TAG, "Cleared previous thread ${previousNoteId.take(8)} before loading new one")
         }
 
-        _uiState.value = _uiState.value.copy(
-            note = note,
-            replies = emptyList(),
-            threadedReplies = emptyList(),
-            totalReplyCount = 0,
-            isLoading = true,
-            error = null
-        )
+        // Always clear replies when switching notes to prevent stale comments from
+        // lingering. The repository will re-emit cached replies (if any) synchronously
+        // in fetchRepliesForNote before the WebSocket fetch begins.
+        _uiState.update { it.copy(note = note, replies = emptyList(), threadedReplies = emptyList(), totalReplyCount = 0, isLoading = true, error = null) }
 
         viewModelScope.launch {
             try {
                 // Connect to relays if not already connected
                 repository.connectToRelays(relayUrls)
 
-                // Fetch replies for this note
+                // Fetch replies for this note (includes author's outbox relays if cached)
                 repository.fetchRepliesForNote(
                     noteId = note.id,
                     relayUrls = relayUrls,
-                    limit = 200
+                    limit = 200,
+                    authorPubkey = note.author.id
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading replies: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(
-                    error = "Failed to load replies: ${e.message}",
-                    isLoading = false
-                )
+                _uiState.update { it.copy(error = "Failed to load replies: ${e.message}", isLoading = false) }
             }
         }
     }
 
     /**
      * Update replies state with sorting and threaded structure (NIP-10 reply chains).
+     * Fast-path: skip if reply set is unchanged (same count + same IDs) to avoid
+     * redundant sort/thread/recompose when the second relay delivers identical events.
      */
     private fun updateRepliesState(replies: List<Note>) {
-        val sortedReplies = when (_uiState.value.sortOrder) {
+        val current = _uiState.value
+        // Fast-path: skip if reply set is unchanged
+        if (replies.size == current.totalReplyCount && replies.size > 0) {
+            val currentIds = current.replies.mapTo(HashSet(current.replies.size)) { it.id }
+            if (replies.all { it.id in currentIds }) return
+        }
+
+        val sortedReplies = when (current.sortOrder) {
             Kind1ReplySortOrder.CHRONOLOGICAL -> replies.sortedBy { it.timestamp }
             Kind1ReplySortOrder.REVERSE_CHRONOLOGICAL -> replies.sortedByDescending { it.timestamp }
             Kind1ReplySortOrder.MOST_LIKED -> replies.sortedByDescending { it.likes }
@@ -149,16 +169,70 @@ class Kind1RepliesViewModel : ViewModel() {
         val threadReplies = sortedReplies.map { it.toThreadReplyForThread() }
         val threadedReplies = organizeRepliesIntoThreads(threadReplies)
 
-        val noteId = _uiState.value.note?.id
-        _uiState.value = _uiState.value.copy(
-            replies = sortedReplies,
-            threadedReplies = threadedReplies,
-            totalReplyCount = replies.size,
-            isLoading = false
-        )
-        if (noteId != null) com.example.views.repository.ReplyCountCache.set(noteId, replies.size)
+        val noteId = current.note?.id
+        _uiState.update { it.copy(replies = sortedReplies, threadedReplies = threadedReplies, totalReplyCount = replies.size, isLoading = false) }
+        // Cache only direct (depth-1) reply count for feed cards — not the entire chain
+        if (noteId != null) {
+            val directCount = replies.count { it.replyToId == noteId || it.replyToId == null }
+            com.example.views.repository.ReplyCountCache.set(noteId, directCount)
+        }
 
-        Log.d(TAG, "Updated replies state: ${replies.size} replies, ${threadedReplies.size} root threads")
+        // Thread completeness trace
+        traceThreadCompleteness(noteId, threadReplies, threadedReplies)
+    }
+
+    /**
+     * Trace thread completeness: log orphans (missing parents), max depth, and chain structure.
+     * This tells us definitively what events we're missing.
+     */
+    private fun traceThreadCompleteness(
+        rootId: String?,
+        flatReplies: List<ThreadReply>,
+        threadedReplies: List<ThreadedReply>
+    ) {
+        if (flatReplies.isEmpty()) {
+            Log.d(TAG, "TRACE [${rootId?.take(8)}]: 0 replies")
+            return
+        }
+        val replyIds = flatReplies.map { it.id }.toSet()
+
+        // Find orphans: replies whose replyToId is not in the set and not the root
+        val orphans = flatReplies.filter { r ->
+            r.replyToId != null && r.replyToId != rootId && r.replyToId !in replyIds
+        }
+        val missingParentIds = orphans.map { it.replyToId!! }.toSet()
+
+        // Count direct vs nested
+        val directReplies = flatReplies.count { r -> r.replyToId == rootId || r.replyToId == null }
+        val nestedReplies = flatReplies.size - directReplies
+
+        // Max depth
+        fun maxDepth(tree: List<ThreadedReply>): Int =
+            if (tree.isEmpty()) 0 else 1 + maxDepth(tree.flatMap { it.children })
+        val depth = maxDepth(threadedReplies)
+
+        val sb = StringBuilder()
+        sb.append("TRACE [${rootId?.take(8)}]: ${flatReplies.size} replies (${directReplies} direct, ${nestedReplies} nested), ")
+        sb.append("${threadedReplies.size} root threads, depth=$depth")
+        if (orphans.isNotEmpty()) {
+            sb.append(", ${orphans.size} ORPHANS missing parents: ${missingParentIds.joinToString { it.take(8) }}")
+        }
+        Log.d(TAG, sb.toString())
+
+        // Log chain structure for threads with nesting
+        if (depth > 1) {
+            fun traceChain(node: ThreadedReply, indent: String = "  ") {
+                val marker = if (node.isOrphan) " [ORPHAN]" else ""
+                Log.d(TAG, "${indent}├─ ${node.reply.id.take(8)} (L${node.level})${marker} → ${node.children.size} children")
+                node.children.forEach { traceChain(it, "$indent  ") }
+            }
+            threadedReplies.forEach { root ->
+                if (root.children.isNotEmpty()) {
+                    Log.d(TAG, "CHAIN: ${root.reply.id.take(8)} (L0) → ${root.children.size} children")
+                    root.children.forEach { traceChain(it) }
+                }
+            }
+        }
     }
 
     /**
@@ -172,10 +246,15 @@ class Kind1RepliesViewModel : ViewModel() {
         val noteId = _uiState.value.note?.id ?: return emptyList()
         val replyIds = replies.map { it.id }.toSet()
 
-        fun buildThreadedReply(reply: ThreadReply, level: Int = 0): ThreadedReply {
-            val children = replies
-                .filter { it.replyToId == reply.id }
-                .map { buildThreadedReply(it, level + 1) }
+        // Index children by parent for O(1) lookup instead of O(N) filter per node
+        val childrenByParent = replies.groupBy { it.replyToId }
+
+        fun buildThreadedReply(reply: ThreadReply, level: Int = 0, visited: Set<String> = emptySet()): ThreadedReply {
+            // Cycle protection: if we've already visited this reply, stop recursion
+            if (reply.id in visited) return ThreadedReply(reply = reply, children = emptyList(), level = level)
+            val nextVisited = visited + reply.id
+            val children = (childrenByParent[reply.id] ?: emptyList())
+                .map { buildThreadedReply(it, level + 1, nextVisited) }
                 .sortedBy { it.reply.timestamp }
             return ThreadedReply(reply = reply, children = children, level = level)
         }
@@ -192,8 +271,17 @@ class Kind1RepliesViewModel : ViewModel() {
                 val isOrphan = reply.replyToId != null &&
                     reply.replyToId != noteId &&
                     reply.replyToId !in replyIds
+                if (isOrphan) {
+                    Log.d(TAG, "Orphan reply ${reply.id.take(8)} — parent ${reply.replyToId?.take(8)} not in ${replyIds.size} replies")
+                }
                 buildThreadedReply(reply).copy(isOrphan = isOrphan)
             }
+
+        // Verify all replies are accounted for (no silently dropped replies)
+        val threadedCount = countThreadedReplies(rootReplies)
+        if (threadedCount != replies.size) {
+            Log.w(TAG, "Threading mismatch: ${replies.size} replies but $threadedCount in tree — ${replies.size - threadedCount} lost")
+        }
 
         return when (_uiState.value.sortOrder) {
             Kind1ReplySortOrder.CHRONOLOGICAL -> rootReplies.sortedBy { it.reply.timestamp }
@@ -202,12 +290,16 @@ class Kind1RepliesViewModel : ViewModel() {
         }
     }
 
+    /** Count total replies in a threaded tree (for consistency verification). */
+    private fun countThreadedReplies(tree: List<ThreadedReply>): Int =
+        tree.sumOf { 1 + countThreadedReplies(it.children) }
+
     /**
      * Change sort order for replies
      */
     fun setSortOrder(sortOrder: Kind1ReplySortOrder) {
         if (_uiState.value.sortOrder != sortOrder) {
-            _uiState.value = _uiState.value.copy(sortOrder = sortOrder)
+            _uiState.update { it.copy(sortOrder = sortOrder) }
             updateRepliesState(_uiState.value.replies)
         }
     }
@@ -265,11 +357,7 @@ class Kind1RepliesViewModel : ViewModel() {
     fun clearRepliesForNote(noteId: String) {
         repository.clearRepliesForNote(noteId)
         if (_uiState.value.note?.id == noteId) {
-            _uiState.value = _uiState.value.copy(
-                replies = emptyList(),
-                threadedReplies = emptyList(),
-                totalReplyCount = 0
-            )
+            _uiState.update { it.copy(replies = emptyList(), threadedReplies = emptyList(), totalReplyCount = 0) }
         }
     }
 

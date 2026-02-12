@@ -3,25 +3,34 @@ package com.example.views.repository
 import android.content.Context
 import android.util.Log
 import com.example.views.data.Author
-import com.example.views.relay.RelayConnectionStateMachine
-import com.vitorpamplona.quartz.nip01Core.core.Event
-import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.Collections
 import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -47,24 +56,53 @@ class ProfileMetadataCache {
         private const val KIND0_BULK_FETCH_TIMEOUT_MS = 12_000L
         /** Above this many pubkeys we use the bulk timeout. */
         private const val BULK_THRESHOLD = 50
-        private const val MAX_ENTRIES = 800
+        private const val MAX_ENTRIES = 2000
 
         /** When over this size, we evict even pinned (follow-list) profiles to avoid unbounded growth. */
-        private const val HARD_CAP = 1200
+        private const val HARD_CAP = 3000
 
         /** Size to trim to when app is in background. */
-        const val TRIM_SIZE_BACKGROUND = 300
+        const val TRIM_SIZE_BACKGROUND = 800
 
         private const val PROFILE_CACHE_PREFS = "profile_metadata_cache"
         private const val PROFILE_CACHE_KEY = "profiles_json"
         private const val PROFILE_CREATED_AT_KEY = "profiles_created_at_json"
-        /** Max profiles saved to disk. Keep reasonable for SharedPreferences size. */
-        private const val DISK_CACHE_MAX = 300
+        private const val OUTBOX_RELAYS_KEY = "outbox_relays_json"
+        private const val PROFILE_FETCHED_AT_KEY = "profiles_fetched_at_json"
+        /** Max profiles saved to disk. */
+        private const val DISK_CACHE_MAX = 1500
         /** Debounce delay before writing profile cache to disk after an update. */
         private const val DISK_SAVE_DEBOUNCE_MS = 2000L
+        /** Profiles older than this are considered stale and will be re-fetched when encountered. */
+        private const val PROFILE_TTL_MS = 7L * 24 * 60 * 60 * 1000 // 7 days
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, t -> Log.e(TAG, "Coroutine failed: ${t.message}", t) })
+
+    /** Shared OkHttp client for direct WebSocket kind-0 fetches. */
+    private val wsClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .build()
+
+    // ── Persistent WebSocket pool for kind-0 fetches ────────────────────────
+    /** Map of relay URL → open WebSocket. Connections are reused across batches. */
+    private val wsPool = ConcurrentHashMap<String, WebSocket>()
+    /** Track which relay connections are ready (onOpen received). */
+    private val wsReady = ConcurrentHashMap<String, Boolean>()
+    /** Current subscription ID per relay so we can CLOSE before sending a new REQ. */
+    private val wsCurrentSubId = ConcurrentHashMap<String, String>()
+
+    // ── Internal batching: accumulate pubkeys from all callers into one batch ──
+    private val internalPendingPubkeys = Collections.synchronizedSet(HashSet<String>())
+    private var internalPendingRelays = listOf<String>()
+    private var internalBatchScheduleJob: Job? = null
+    private var internalBatchFetchJob: Job? = null
+    private val INTERNAL_BATCH_DELAY_MS = 400L
+    private val INTERNAL_BATCH_SIZE = 80
+    /** Shared counter for profiles received across all pool connections. */
+    private val poolReceived = AtomicInteger(0)
 
     /** Application context for SharedPreferences persistence. Set via [init]. */
     @Volatile private var appContext: Context? = null
@@ -97,9 +135,19 @@ class ProfileMetadataCache {
     )
     /** Store createdAt per pubkey so we only keep the latest kind-0 when multiple relays send profiles. */
     private val profileCreatedAt = ConcurrentHashMap<String, Long>()
+    /** Wall-clock time (System.currentTimeMillis) when each profile was last fetched from network.
+     *  Used for TTL-based stale refresh: profiles older than PROFILE_TTL_MS are re-requested. */
+    private val profileFetchedAt = ConcurrentHashMap<String, Long>()
+    /** Per-user outbox relay URLs (NIP-65 write relays). Persisted alongside profiles. */
+    private val outboxRelayCache = ConcurrentHashMap<String, List<String>>()
     /** Large buffer so bulk loads (e.g. debug "Fetch all") don't drop emissions before coalescer can apply to feed. */
     private val _profileUpdated = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 2048)
     val profileUpdated: SharedFlow<String> = _profileUpdated.asSharedFlow()
+
+    /** Flips to true once the disk cache has been restored. UI components can key on this to rebuild
+     *  content that was rendered with placeholder authors before the disk cache was ready. */
+    private val _diskCacheRestored = MutableStateFlow(false)
+    val diskCacheRestored: StateFlow<Boolean> = _diskCacheRestored.asStateFlow()
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -122,6 +170,24 @@ class ProfileMetadataCache {
     }
 
     fun getAuthor(pubkey: String): Author? = cache[normalizeKey(pubkey)]
+
+    /** Check if a cached profile is stale (older than PROFILE_TTL_MS). Returns true if missing or stale. */
+    fun isProfileStale(pubkey: String): Boolean {
+        val key = normalizeKey(pubkey)
+        if (cache[key] == null) return true
+        val fetchedAt = profileFetchedAt[key] ?: return true
+        return (System.currentTimeMillis() - fetchedAt) > PROFILE_TTL_MS
+    }
+
+    /** Store outbox relay URLs for a user (NIP-65 write relays). */
+    fun setOutboxRelays(pubkey: String, relayUrls: List<String>) {
+        outboxRelayCache[normalizeKey(pubkey)] = relayUrls
+        scheduleDiskSave()
+    }
+
+    /** Get cached outbox relay URLs for a user. Returns empty list if not cached. */
+    fun getOutboxRelays(pubkey: String): List<String> =
+        outboxRelayCache[normalizeKey(pubkey)] ?: emptyList()
 
     /**
      * Resolve author: cached or placeholder. Call requestProfiles(listOf(pubkey)) to fetch if missing.
@@ -150,6 +216,7 @@ class ProfileMetadataCache {
         if (createdAt < existingAt) return false
         cache[key] = author
         profileCreatedAt[key] = createdAt
+        profileFetchedAt[key] = System.currentTimeMillis()
         scope.launch {
             _profileUpdated.emit(key)
         }
@@ -161,6 +228,7 @@ class ProfileMetadataCache {
         val key = normalizeKey(pubkey)
         cache[key] = author
         profileCreatedAt[key] = Long.MAX_VALUE
+        profileFetchedAt[key] = System.currentTimeMillis()
         scope.launch {
             _profileUpdated.emit(key)
         }
@@ -168,45 +236,175 @@ class ProfileMetadataCache {
     }
 
     /**
-     * Fetch kind-0 for pubkeys from cache relays. Uses a dedicated client so main feed is not replaced.
+     * Public API: accumulate pubkeys into an internal batch and schedule a debounced fetch.
+     * All callers (NotesRepository, Kind1RepliesRepository, NotificationsRepository, etc.)
+     * funnel through here. The actual WebSocket fetch fires once after the debounce settles,
+     * preventing socket exhaustion from dozens of 1-pubkey callers each opening 6 connections.
      */
     suspend fun requestProfiles(pubkeys: List<String>, cacheRelayUrls: List<String>) {
         if (pubkeys.isEmpty() || cacheRelayUrls.isEmpty()) return
-        val uncached = pubkeys.filter { cache[normalizeKey(it)] == null }
-        if (uncached.isEmpty()) return
+        // Fetch profiles that are missing OR stale (older than TTL)
+        val needed = pubkeys.filter { pk ->
+            val key = normalizeKey(pk)
+            cache[key] == null || isProfileStale(pk)
+        }
+        if (needed.isEmpty()) return
 
-        Log.d(TAG, "Fetching kind-0 for ${uncached.size} pubkeys from ${cacheRelayUrls.size} cache relays")
-        try {
-            val filter = Filter(
-                kinds = listOf(0),
-                authors = uncached,
-                limit = uncached.size
-            )
-            val received = AtomicInteger(0)
-            val stateMachine = RelayConnectionStateMachine.getInstance()
-            val handle = stateMachine.requestTemporarySubscription(cacheRelayUrls, filter) { event ->
-                if (event.kind == 0) {
-                    val author = parseKind0(event)
-                    if (author != null && putProfileIfNewer(event.pubKey, author, event.createdAt)) {
-                        received.incrementAndGet()
+        internalPendingPubkeys.addAll(needed.map { normalizeKey(it) })
+        if (cacheRelayUrls.isNotEmpty()) internalPendingRelays = cacheRelayUrls
+
+        scheduleInternalBatch()
+    }
+
+    /**
+     * Schedule the internal batch fetch. Resets the debounce timer on each call so pubkeys
+     * accumulate. In-flight fetches are never cancelled.
+     */
+    private fun scheduleInternalBatch() {
+        internalBatchScheduleJob?.cancel()
+        internalBatchScheduleJob = scope.launch {
+            delay(INTERNAL_BATCH_DELAY_MS)
+            // Wait for any in-flight fetch to finish
+            internalBatchFetchJob?.join()
+            internalBatchFetchJob = scope.launch {
+                while (internalPendingPubkeys.isNotEmpty()) {
+                    val batch = synchronized(internalPendingPubkeys) {
+                        internalPendingPubkeys.take(INTERNAL_BATCH_SIZE).also { internalPendingPubkeys.removeAll(it.toSet()) }
                     }
+                    if (batch.isEmpty()) break
+                    val relays = internalPendingRelays
+                    if (relays.isEmpty()) {
+                        internalPendingPubkeys.addAll(batch)
+                        break
+                    }
+                    fetchProfilesBatch(batch, relays)
+                    if (internalPendingPubkeys.isNotEmpty()) delay(300)
                 }
+                internalBatchFetchJob = null
             }
-            val timeoutMs = if (uncached.size > BULK_THRESHOLD) KIND0_BULK_FETCH_TIMEOUT_MS else KIND0_FETCH_TIMEOUT_MS
-            delay(timeoutMs)
-            handle.cancel()
-            Log.d(TAG, "Kind-0 fetch done: ${received.get()} profiles")
-        } catch (e: Exception) {
-            Log.e(TAG, "Kind-0 fetch failed: ${e.message}", e)
+            internalBatchScheduleJob = null
         }
     }
 
-    private fun parseKind0(event: Event): Author? {
+    /**
+     * Actual WebSocket fetch for a batch of pubkeys using the persistent connection pool.
+     */
+    private suspend fun fetchProfilesBatch(pubkeys: List<String>, cacheRelayUrls: List<String>) {
+        val uncached = pubkeys.filter { cache[normalizeKey(it)] == null }
+        if (uncached.isEmpty()) return
+
+        val fallbackRelays = listOf("wss://purplepag.es", "wss://relay.damus.io", "wss://nos.lol")
+        val allRelays = (cacheRelayUrls + fallbackRelays).distinct()
+
+        Log.d(TAG, "Fetching kind-0 for ${uncached.size} pubkeys from ${allRelays.size} relays (pool)")
+        val beforeCount = poolReceived.get()
+
+        val subId = "prof_" + System.currentTimeMillis().toString(36)
+        val filterObj = JSONObject().apply {
+            put("kinds", JSONArray().apply { put(0) })
+            put("authors", JSONArray().apply { uncached.forEach { put(it) } })
+            put("limit", uncached.size)
+        }
+        val reqJson = JSONArray().apply {
+            put("REQ")
+            put(subId)
+            put(filterObj)
+        }.toString()
+
+        for (relayUrl in allRelays) {
+            val existingWs = wsPool[relayUrl]
+            if (existingWs != null && wsReady[relayUrl] == true) {
+                val prevSub = wsCurrentSubId[relayUrl]
+                if (prevSub != null) {
+                    try { existingWs.send(JSONArray().apply { put("CLOSE"); put(prevSub) }.toString()) } catch (_: Exception) {}
+                }
+                wsCurrentSubId[relayUrl] = subId
+                try { existingWs.send(reqJson) } catch (_: Exception) {
+                    wsPool.remove(relayUrl)
+                    wsReady.remove(relayUrl)
+                    wsCurrentSubId.remove(relayUrl)
+                    openPoolConnection(relayUrl, subId, reqJson)
+                }
+            } else if (existingWs == null) {
+                openPoolConnection(relayUrl, subId, reqJson)
+            }
+        }
+
+        val timeoutMs = if (uncached.size > BULK_THRESHOLD) KIND0_BULK_FETCH_TIMEOUT_MS else KIND0_FETCH_TIMEOUT_MS
+        delay(timeoutMs)
+        val batchReceived = poolReceived.get() - beforeCount
+        Log.d(TAG, "Kind-0 fetch done: $batchReceived/${uncached.size} profiles from ${allRelays.size} relays")
+    }
+
+    /**
+     * Open a new persistent WebSocket connection to a relay and add it to the pool.
+     * The connection stays open for reuse by subsequent requestProfiles calls.
+     * Uses the shared [poolReceived] counter so all batches see the same count.
+     */
+    private fun openPoolConnection(relayUrl: String, subId: String, reqJson: String) {
+        try {
+            val httpUrl = relayUrl.replace("wss://", "https://").replace("ws://", "http://")
+            val request = Request.Builder().url(httpUrl).build()
+            val ws = wsClient.newWebSocket(request, object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    wsReady[relayUrl] = true
+                    wsCurrentSubId[relayUrl] = subId
+                    webSocket.send(reqJson)
+                    Log.d(TAG, "Pool WS open: $relayUrl")
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val arr = JSONArray(text)
+                        val type = arr.getString(0)
+                        if (type == "EVENT" && arr.length() >= 3) {
+                            val eventJson = arr.getJSONObject(2)
+                            val kind = eventJson.optInt("kind", -1)
+                            if (kind == 0) {
+                                val pubkey = eventJson.optString("pubkey", "")
+                                val content = eventJson.optString("content", "")
+                                val createdAt = eventJson.optLong("created_at", 0L)
+                                if (pubkey.isNotBlank() && content.isNotBlank()) {
+                                    val author = parseKind0Content(pubkey, content)
+                                    if (author != null && putProfileIfNewer(pubkey, author, createdAt)) {
+                                        poolReceived.incrementAndGet()
+                                    }
+                                }
+                            }
+                        }
+                        // Don't close on EOSE — keep connection alive for reuse
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Pool WS parse error ($relayUrl): ${e.message}")
+                    }
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    Log.w(TAG, "Pool WS fail ($relayUrl): ${t.message}")
+                    wsPool.remove(relayUrl)
+                    wsReady.remove(relayUrl)
+                    wsCurrentSubId.remove(relayUrl)
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    wsPool.remove(relayUrl)
+                    wsReady.remove(relayUrl)
+                    wsCurrentSubId.remove(relayUrl)
+                }
+            })
+            wsPool[relayUrl] = ws
+        } catch (e: Exception) {
+            Log.w(TAG, "Pool WS connect error ($relayUrl): ${e.message}")
+        }
+    }
+
+    /**
+     * Parse kind-0 content JSON into an Author, without needing a Quartz Event object.
+     */
+    private fun parseKind0Content(pubkey: String, content: String): Author? {
         return try {
-            val parsed = json.decodeFromString<Kind0Content>(event.content)
-            val key = normalizeKey(event.pubKey)
-            val fallbackShort = event.pubKey.take(8) + "..."
-            // NIP-01: display_name is display name; name is username. Prefer display_name for display, name for username.
+            val parsed = json.decodeFromString<Kind0Content>(content)
+            val key = normalizeKey(pubkey)
+            val fallbackShort = pubkey.take(8) + "..."
             val displayName = sanitizeKind0String(parsed.display_name, 64)
                 ?: sanitizeKind0String(parsed.name, 64)
                 ?: fallbackShort
@@ -234,7 +432,7 @@ class ProfileMetadataCache {
                 pronouns = pronouns?.takeIf { it.isNotBlank() }
             )
         } catch (e: Exception) {
-            Log.w(TAG, "Parse kind-0 failed: ${e.message}")
+            Log.w(TAG, "Parse kind-0 content failed: ${e.message}")
             null
         }
     }
@@ -284,6 +482,8 @@ class ProfileMetadataCache {
                 val prefs = ctx.getSharedPreferences(PROFILE_CACHE_PREFS, Context.MODE_PRIVATE)
                 val profilesJson = prefs.getString(PROFILE_CACHE_KEY, null) ?: return@withContext
                 val createdAtJson = prefs.getString(PROFILE_CREATED_AT_KEY, null)
+                val fetchedAtJson = prefs.getString(PROFILE_FETCHED_AT_KEY, null)
+                val outboxJson = prefs.getString(OUTBOX_RELAYS_KEY, null)
 
                 val profiles: Map<String, Author> = json.decodeFromString(profilesJson)
                 val createdAts: Map<String, Long> = if (createdAtJson != null) {
@@ -291,19 +491,43 @@ class ProfileMetadataCache {
                 } else {
                     emptyMap()
                 }
+                val fetchedAts: Map<String, Long> = if (fetchedAtJson != null) {
+                    try { json.decodeFromString(fetchedAtJson) } catch (_: Exception) { emptyMap() }
+                } else {
+                    emptyMap()
+                }
+                val outboxRelays: Map<String, List<String>> = if (outboxJson != null) {
+                    try { json.decodeFromString(outboxJson) } catch (_: Exception) { emptyMap() }
+                } else {
+                    emptyMap()
+                }
 
                 if (profiles.isEmpty()) return@withContext
 
+                val restoredKeys = mutableListOf<String>()
                 synchronized(cache) {
                     for ((key, author) in profiles) {
                         val normalized = normalizeKey(key)
                         if (cache[normalized] == null) {
                             cache[normalized] = author
                             createdAts[normalized]?.let { profileCreatedAt[normalized] = it }
+                            fetchedAts[normalized]?.let { profileFetchedAt[normalized] = it }
+                            restoredKeys.add(normalized)
                         }
                     }
                 }
-                Log.d(TAG, "Restored ${profiles.size} profiles from disk cache")
+                // Restore outbox relay cache
+                for ((key, relays) in outboxRelays) {
+                    val normalized = normalizeKey(key)
+                    if (outboxRelayCache[normalized] == null) {
+                        outboxRelayCache[normalized] = relays
+                    }
+                }
+                Log.d(TAG, "Restored ${profiles.size} profiles, ${outboxRelays.size} outbox relay sets from disk cache (${restoredKeys.size} new)")
+                // Signal UI components to rebuild with real display names.
+                // We use diskCacheRestored (StateFlow) instead of emitting profileUpdated
+                // for every key, which would flood reply ViewModels and cause race conditions.
+                _diskCacheRestored.value = true
             } catch (e: Exception) {
                 Log.e(TAG, "Load profile cache from disk failed: ${e.message}", e)
             }
@@ -317,24 +541,35 @@ class ProfileMetadataCache {
                 // Take a snapshot of the most recent entries (pinned first, then LRU order)
                 val snapshot: Map<String, Author>
                 val createdAtSnapshot: Map<String, Long>
+                val fetchedAtSnapshot: Map<String, Long>
+                val outboxSnapshot: Map<String, List<String>>
                 synchronized(cache) {
                     val pinned = cache.entries.filter { it.key in pinnedPubkeys }
                     val rest = cache.entries.filter { it.key !in pinnedPubkeys }
                     val combined = (pinned + rest).takeLast(DISK_CACHE_MAX)
+                    val keys = combined.map { it.key }.toSet()
                     snapshot = combined.associate { it.key to it.value }
                     createdAtSnapshot = combined.mapNotNull { entry ->
                         profileCreatedAt[entry.key]?.let { entry.key to it }
                     }.toMap()
+                    fetchedAtSnapshot = combined.mapNotNull { entry ->
+                        profileFetchedAt[entry.key]?.let { entry.key to it }
+                    }.toMap()
+                    outboxSnapshot = outboxRelayCache.filter { it.key in keys }
                 }
 
                 val profilesJson = json.encodeToString(snapshot)
                 val createdAtJson = json.encodeToString(createdAtSnapshot)
+                val fetchedAtJson = json.encodeToString(fetchedAtSnapshot)
+                val outboxJson = json.encodeToString(outboxSnapshot)
                 ctx.getSharedPreferences(PROFILE_CACHE_PREFS, Context.MODE_PRIVATE)
                     .edit()
                     .putString(PROFILE_CACHE_KEY, profilesJson)
                     .putString(PROFILE_CREATED_AT_KEY, createdAtJson)
+                    .putString(PROFILE_FETCHED_AT_KEY, fetchedAtJson)
+                    .putString(OUTBOX_RELAYS_KEY, outboxJson)
                     .apply()
-                Log.d(TAG, "Saved ${snapshot.size} profiles to disk cache")
+                Log.d(TAG, "Saved ${snapshot.size} profiles, ${outboxSnapshot.size} outbox relay sets to disk cache")
             } catch (e: Exception) {
                 Log.e(TAG, "Save profile cache to disk failed: ${e.message}", e)
             }

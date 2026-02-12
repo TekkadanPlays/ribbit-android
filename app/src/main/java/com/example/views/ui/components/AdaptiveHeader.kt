@@ -5,8 +5,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.*
@@ -75,18 +73,21 @@ fun AdaptiveHeader(
     // Topics favorites filter (kind:30073 anchor subscriptions)
     isTopicsFavoritesFilter: Boolean = false,
     onTopicsFavoritesFilterChange: ((Boolean) -> Unit)? = null,
+    activeEngagementFilter: String? = null,
+    onEngagementFilterChange: (String?) -> Unit = {},
+    /** Navigate to Topics screen from the Ribbit logo menu. */
+    onNavigateToTopics: (() -> Unit)? = null,
+    /** Navigate to Home feed from the Topics logo menu. */
+    onNavigateToHome: (() -> Unit)? = null,
+    /** Navigate to Live broadcast explorer. */
+    onNavigateToLive: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    // Feed title dropdown / slide-out state (filter options)
-    var feedDropdownExpanded by remember { mutableStateOf(false) }
-    val rotationAngle by animateFloatAsState(
-        targetValue = if (feedDropdownExpanded) 180f else 0f,
-        animationSpec = tween(200),
-        label = "caret_rotation"
-    )
+    // Ribbit logo dropdown menu state
+    var logoMenuExpanded by remember { mutableStateOf(false) }
 
     // Show keyboard when search mode is activated
     LaunchedEffect(isSearchMode) {
@@ -96,18 +97,19 @@ fun AdaptiveHeader(
         }
     }
 
-    // Auto-collapse filter dropdown when header begins to hide from scroll
+    // Auto-collapse menu when header begins to hide from scroll
     val collapsedFraction = scrollBehavior?.state?.collapsedFraction ?: 0f
     LaunchedEffect(collapsedFraction) {
-        if (collapsedFraction > 0.05f && feedDropdownExpanded) {
-            feedDropdownExpanded = false
+        if (collapsedFraction > 0.05f && logoMenuExpanded) {
+            logoMenuExpanded = false
         }
     }
 
-    val hasFilterSlideOut = !showBackArrow && !isSearchMode &&
-        (onFollowingFilterChange != null || onTopicsFollowingFilterChange != null)
-
-    Column(modifier = modifier) {
+    Column(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.surface)
+            .statusBarsPadding()
+    ) {
         TopAppBar(
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = MaterialTheme.colorScheme.surface,
@@ -116,6 +118,7 @@ fun AdaptiveHeader(
                 actionIconContentColor = MaterialTheme.colorScheme.onSurface,
                 navigationIconContentColor = MaterialTheme.colorScheme.onSurface
             ),
+            windowInsets = WindowInsets(0),
             title = {
                 if (isSearchMode) {
                     TextField(
@@ -168,30 +171,140 @@ fun AdaptiveHeader(
                             overflow = TextOverflow.Ellipsis
                         )
                     } else {
-                        Row(
-                            modifier = Modifier
-                                .clickable { feedDropdownExpanded = !feedDropdownExpanded }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = title,
-                                style = MaterialTheme.typography.headlineSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(
-                                imageVector = Icons.Default.KeyboardArrowDown,
-                                contentDescription = "Feed filter options",
-                                tint = MaterialTheme.colorScheme.onSurface,
+                        Box {
+                            Row(
                                 modifier = Modifier
-                                    .size(20.dp)
-                                    .rotate(rotationAngle)
-                            )
+                                    .clickable { logoMenuExpanded = !logoMenuExpanded }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.headlineSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Feed options",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            // Adaptive logo dropdown menu
+                            DropdownMenu(
+                                expanded = logoMenuExpanded,
+                                onDismissRequest = { logoMenuExpanded = false },
+                                offset = DpOffset(x = 0.dp, y = 4.dp)
+                            ) {
+                                if (onTopicsFollowingFilterChange != null) {
+                                    // ── Topics screen menu ──
+                                    // Home navigation
+                                    if (onNavigateToHome != null) {
+                                        DropdownMenuItem(
+                                            text = { Text("Home") },
+                                            onClick = {
+                                                logoMenuExpanded = false
+                                                onNavigateToHome()
+                                            },
+                                            leadingIcon = { Icon(Icons.Outlined.Home, contentDescription = null) }
+                                        )
+                                    }
+                                    // Live broadcast explorer
+                                    if (onNavigateToLive != null) {
+                                        DropdownMenuItem(
+                                            text = { Text("Live") },
+                                            onClick = {
+                                                logoMenuExpanded = false
+                                                onNavigateToLive()
+                                            },
+                                            leadingIcon = { Icon(Icons.Filled.Videocam, contentDescription = null) }
+                                        )
+                                    }
+                                    if (onNavigateToHome != null || onNavigateToLive != null) {
+                                        HorizontalDivider()
+                                    }
+                                    // Topics: All / Following
+                                    DropdownMenuItem(
+                                        text = { Text("All") },
+                                        onClick = {
+                                            logoMenuExpanded = false
+                                            onTopicsFollowingFilterChange(false)
+                                        },
+                                        leadingIcon = { Icon(Icons.Outlined.Public, contentDescription = null) },
+                                        trailingIcon = {
+                                            if (!isTopicsFollowingFilter) Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Following") },
+                                        onClick = {
+                                            logoMenuExpanded = false
+                                            onTopicsFollowingFilterChange(true)
+                                        },
+                                        leadingIcon = { Icon(Icons.Outlined.People, contentDescription = null) },
+                                        trailingIcon = {
+                                            if (isTopicsFollowingFilter) Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        }
+                                    )
+                                } else {
+                                    // ── Dashboard / Home screen menu ──
+                                    // Topics navigation
+                                    if (onNavigateToTopics != null) {
+                                        DropdownMenuItem(
+                                            text = { Text("Topics") },
+                                            onClick = {
+                                                logoMenuExpanded = false
+                                                onNavigateToTopics()
+                                            },
+                                            leadingIcon = { Icon(Icons.Default.Tag, contentDescription = null) }
+                                        )
+                                    }
+                                    // Live broadcast explorer
+                                    if (onNavigateToLive != null) {
+                                        DropdownMenuItem(
+                                            text = { Text("Live") },
+                                            onClick = {
+                                                logoMenuExpanded = false
+                                                onNavigateToLive()
+                                            },
+                                            leadingIcon = { Icon(Icons.Filled.Videocam, contentDescription = null) }
+                                        )
+                                    }
+                                    if (onNavigateToTopics != null || onNavigateToLive != null) {
+                                        HorizontalDivider()
+                                    }
+                                    // Home: Global / Following
+                                    if (onFollowingFilterChange != null) {
+                                        DropdownMenuItem(
+                                            text = { Text("Global") },
+                                            onClick = {
+                                                logoMenuExpanded = false
+                                                onFollowingFilterChange(false)
+                                            },
+                                            leadingIcon = { Icon(Icons.Outlined.Public, contentDescription = null) },
+                                            trailingIcon = {
+                                                if (!isFollowingFilter) Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Following") },
+                                            onClick = {
+                                                logoMenuExpanded = false
+                                                onFollowingFilterChange(true)
+                                            },
+                                            leadingIcon = { Icon(Icons.Outlined.People, contentDescription = null) },
+                                            trailingIcon = {
+                                                if (isFollowingFilter) Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -232,6 +345,178 @@ fun AdaptiveHeader(
                         )
                     }
 
+                    // Feed engagement filter (Replies, Likes, Zaps)
+                    if (!showBackArrow) {
+                        var filterMenuExpanded by remember { mutableStateOf(false) }
+                        Box {
+                            val filterActive = if (onTopicsSortOrderChange != null) {
+                                topicsSortOrder != TopicsSortOrder.Latest || isTopicsFavoritesFilter
+                            } else {
+                                activeEngagementFilter != null || homeSortOrder != HomeSortOrder.Latest
+                            }
+                            IconButton(onClick = { filterMenuExpanded = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.FilterList,
+                                    contentDescription = "Filter feed",
+                                    tint = if (filterActive)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = filterMenuExpanded,
+                                onDismissRequest = { filterMenuExpanded = false },
+                                offset = DpOffset(x = (-8).dp, y = 8.dp)
+                            ) {
+                                if (onTopicsSortOrderChange != null) {
+                                    // ── Topics screen filter menu ──
+                                    DropdownMenuItem(
+                                        text = { Text("Latest") },
+                                        onClick = {
+                                            filterMenuExpanded = false
+                                            onTopicsSortOrderChange(TopicsSortOrder.Latest)
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Outlined.Schedule, contentDescription = null)
+                                        },
+                                        trailingIcon = {
+                                            if (topicsSortOrder == TopicsSortOrder.Latest) {
+                                                Icon(Icons.Default.Check, contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary)
+                                            }
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Popular") },
+                                        onClick = {
+                                            filterMenuExpanded = false
+                                            onTopicsSortOrderChange(TopicsSortOrder.Popular)
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Outlined.TrendingUp, contentDescription = null)
+                                        },
+                                        trailingIcon = {
+                                            if (topicsSortOrder == TopicsSortOrder.Popular) {
+                                                Icon(Icons.Default.Check, contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary)
+                                            }
+                                        }
+                                    )
+                                    if (onTopicsFavoritesFilterChange != null) {
+                                        HorizontalDivider()
+                                        DropdownMenuItem(
+                                            text = { Text("Favorites") },
+                                            onClick = {
+                                                filterMenuExpanded = false
+                                                onTopicsFavoritesFilterChange(!isTopicsFavoritesFilter)
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = if (isTopicsFavoritesFilter) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                                                    contentDescription = null,
+                                                    tint = if (isTopicsFavoritesFilter) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            },
+                                            trailingIcon = {
+                                                if (isTopicsFavoritesFilter) {
+                                                    Icon(Icons.Default.Check, contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.primary)
+                                                }
+                                            }
+                                        )
+                                    }
+                                } else {
+                                    // ── Dashboard / Home filter menu ──
+                                    if (onHomeSortOrderChange != null) {
+                                        DropdownMenuItem(
+                                            text = { Text("Latest") },
+                                            onClick = {
+                                                filterMenuExpanded = false
+                                                onEngagementFilterChange(null)
+                                                onHomeSortOrderChange(HomeSortOrder.Latest)
+                                            },
+                                            leadingIcon = {
+                                                Icon(Icons.Outlined.Schedule, contentDescription = null)
+                                            },
+                                            trailingIcon = {
+                                                if (activeEngagementFilter == null && homeSortOrder == HomeSortOrder.Latest) {
+                                                    Icon(Icons.Default.Check, contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.primary)
+                                                }
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Popular") },
+                                            onClick = {
+                                                filterMenuExpanded = false
+                                                onEngagementFilterChange(null)
+                                                onHomeSortOrderChange(HomeSortOrder.Popular)
+                                            },
+                                            leadingIcon = {
+                                                Icon(Icons.Outlined.TrendingUp, contentDescription = null)
+                                            },
+                                            trailingIcon = {
+                                                if (activeEngagementFilter == null && homeSortOrder == HomeSortOrder.Popular) {
+                                                    Icon(Icons.Default.Check, contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.primary)
+                                                }
+                                            }
+                                        )
+                                        HorizontalDivider()
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text("Replies") },
+                                        onClick = {
+                                            filterMenuExpanded = false
+                                            onEngagementFilterChange("replies")
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.AutoMirrored.Outlined.Reply, contentDescription = null)
+                                        },
+                                        trailingIcon = {
+                                            if (activeEngagementFilter == "replies") {
+                                                Icon(Icons.Default.Check, contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary)
+                                            }
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Likes") },
+                                        onClick = {
+                                            filterMenuExpanded = false
+                                            onEngagementFilterChange("likes")
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Outlined.FavoriteBorder, contentDescription = null)
+                                        },
+                                        trailingIcon = {
+                                            if (activeEngagementFilter == "likes") {
+                                                Icon(Icons.Default.Check, contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary)
+                                            }
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Zaps") },
+                                        onClick = {
+                                            filterMenuExpanded = false
+                                            onEngagementFilterChange("zaps")
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Outlined.ElectricBolt, contentDescription = null)
+                                        },
+                                        trailingIcon = {
+                                            if (activeEngagementFilter == "zaps") {
+                                                Icon(Icons.Default.Check, contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary)
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
 
                     // Profile avatar or login button
                     if (isGuest) {
@@ -333,108 +618,6 @@ fun AdaptiveHeader(
         },
             scrollBehavior = scrollBehavior
         )
-        // Filter row slides out from full header (below bar), in line with rest of header — not trapped in title
-        if (hasFilterSlideOut) {
-            AnimatedVisibility(
-                visible = feedDropdownExpanded,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()
-            ) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 0.dp,
-                    shadowElevation = 0.dp
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // All / Following (Home or Topics)
-                        if (onFollowingFilterChange != null) {
-                            FilterChip(
-                                selected = !isFollowingFilter,
-                                onClick = { onFollowingFilterChange(false) },
-                                label = { Text("All") }
-                            )
-                            FilterChip(
-                                selected = isFollowingFilter,
-                                onClick = { onFollowingFilterChange(true) },
-                                label = { Text("Following") }
-                            )
-                        }
-                        if (onTopicsFollowingFilterChange != null) {
-                            FilterChip(
-                                selected = !isTopicsFollowingFilter,
-                                onClick = { onTopicsFollowingFilterChange(false) },
-                                label = { Text("All") }
-                            )
-                            FilterChip(
-                                selected = isTopicsFollowingFilter,
-                                onClick = { onTopicsFollowingFilterChange(true) },
-                                label = { Text("Following") }
-                            )
-                        }
-                        // Home: Latest | Popular
-                        if (onHomeSortOrderChange != null) {
-                            FilterChip(
-                                selected = homeSortOrder == HomeSortOrder.Latest,
-                                onClick = { onHomeSortOrderChange(HomeSortOrder.Latest) },
-                                label = { Text("Latest") }
-                            )
-                            FilterChip(
-                                selected = homeSortOrder == HomeSortOrder.Popular,
-                                onClick = { onHomeSortOrderChange(HomeSortOrder.Popular) },
-                                label = { Text("Popular") }
-                            )
-                        }
-                        // Topics: Latest | Popular | Favorites star
-                        if (onTopicsSortOrderChange != null) {
-                            FilterChip(
-                                selected = topicsSortOrder == TopicsSortOrder.Latest,
-                                onClick = { onTopicsSortOrderChange(TopicsSortOrder.Latest) },
-                                label = { Text("Latest") }
-                            )
-                            FilterChip(
-                                selected = topicsSortOrder == TopicsSortOrder.Popular,
-                                onClick = { onTopicsSortOrderChange(TopicsSortOrder.Popular) },
-                                label = { Text("Popular") }
-                            )
-                        }
-                        // Favorites star toggle (kind:30073)
-                        if (onTopicsFavoritesFilterChange != null) {
-                            IconButton(
-                                onClick = { onTopicsFavoritesFilterChange(!isTopicsFavoritesFilter) },
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isTopicsFavoritesFilter) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                                    contentDescription = if (isTopicsFavoritesFilter) "Show all" else "Show favorites",
-                                    tint = if (isTopicsFavoritesFilter) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                        }
-                        if (onEditFeedClick != null) {
-                            Spacer(modifier = Modifier.weight(1f))
-                            IconButton(
-                                onClick = onEditFeedClick,
-                                modifier = Modifier.size(40.dp)
-                            ) {
-                                Icon(
-                                    Icons.Outlined.Edit,
-                                    contentDescription = "Edit feed / custom filters (coming soon)",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Filter chip row removed — Topics options now live in the adaptive dropdown menus
     }
 }

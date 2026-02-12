@@ -6,6 +6,7 @@ import com.example.views.data.LiveActivity
 import com.example.views.data.LiveActivityParticipant
 import com.example.views.data.LiveActivityStatus
 import com.vitorpamplona.quartz.nip01Core.core.Event
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,7 +23,7 @@ import kotlinx.coroutines.launch
  */
 class LiveActivityRepository {
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, t -> Log.e(TAG, "Coroutine failed: ${t.message}", t) })
     private val profileCache = ProfileMetadataCache.getInstance()
     private val relayStateMachine = com.example.views.relay.RelayConnectionStateMachine.getInstance()
 

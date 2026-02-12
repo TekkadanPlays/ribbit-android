@@ -3,6 +3,7 @@ package com.example.views.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import com.example.views.ui.components.cutoutPadding
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -83,10 +84,10 @@ private fun createRelayWithNip11Info(
     url: String,
     read: Boolean = true,
     write: Boolean = true,
-    nip11Retriever: com.example.views.cache.nip11.Nip11CachedRetriever
+    nip11Cache: com.example.views.cache.Nip11CacheManager
 ): UserRelay {
     val normalizedUrl = normalizeRelayUrl(url)
-    val cachedInfo = nip11Retriever.getFromCache(normalizedUrl)
+    val cachedInfo = nip11Cache.getCachedRelayInfo(normalizedUrl)
 
     return UserRelay(
         url = normalizedUrl,
@@ -110,7 +111,7 @@ fun RelayManagementScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val nip11Retriever = relayRepository.getNip11Retriever()
+    val nip11Cache = relayRepository.getNip11Cache()
     val storageManager = remember { RelayStorageManager(context) }
 
     val viewModel: RelayManagementViewModel = viewModel {
@@ -174,42 +175,45 @@ fun RelayManagementScreen(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                scrollBehavior = scrollBehavior,
-                title = {
-                    Text(
-                        text = "relays",
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
+            Column(Modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
+                TopAppBar(
+                    scrollBehavior = scrollBehavior,
+                    title = {
+                        Text(
+                            text = "relays",
+                            fontWeight = FontWeight.Bold
                         )
-                    }
-                },
-                actions = {
-                    // Publish button only on Personal tab
-                    if (selectedTab == 1) {
-                        IconButton(
-                            onClick = { /* TODO: Implement publish functionality */ }
-                        ) {
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBackClick) {
                             Icon(
-                                imageVector = Icons.Outlined.Publish,
-                                contentDescription = "Publish"
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back"
                             )
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface
+                    },
+                    actions = {
+                        // Publish button only on Personal tab
+                        if (selectedTab == 1) {
+                            IconButton(
+                                onClick = { /* TODO: Implement publish functionality */ }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Publish,
+                                    contentDescription = "Publish"
+                                )
+                            }
+                        }
+                    },
+                    windowInsets = WindowInsets(0),
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        scrolledContainerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onSurface
+                    )
                 )
-            )
+            }
         }
     ) { paddingValues ->
         Column(
@@ -217,6 +221,117 @@ fun RelayManagementScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+                    // Flagged/blocked relays warning banner
+                    val flaggedRelays by com.example.views.relay.RelayHealthTracker.flaggedRelays.collectAsState()
+                    val blockedRelays by com.example.views.relay.RelayHealthTracker.blockedRelays.collectAsState()
+                    val healthMap by com.example.views.relay.RelayHealthTracker.healthByRelay.collectAsState()
+                    val troubleRelays = remember(flaggedRelays, blockedRelays) {
+                        (flaggedRelays + blockedRelays).distinct().sorted()
+                    }
+                    if (troubleRelays.isNotEmpty()) {
+                        var expanded by remember { mutableStateOf(false) }
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .clickable { expanded = !expanded },
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Warning,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "${troubleRelays.size} relay${if (troubleRelays.size > 1) "s" else ""} need attention",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Icon(
+                                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                                if (expanded) {
+                                    Spacer(Modifier.height(8.dp))
+                                    troubleRelays.forEach { url ->
+                                        val health = healthMap[url]
+                                        val isBlocked = url in blockedRelays
+                                        val isFlagged = url in flaggedRelays
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp)
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = url.removePrefix("wss://"),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.Medium,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                if (health != null) {
+                                                    val status = when {
+                                                        isBlocked -> "Blocked"
+                                                        isFlagged -> "${health.consecutiveFailures} consecutive failures"
+                                                        else -> ""
+                                                    }
+                                                    val detail = health.lastError?.take(60) ?: ""
+                                                    Text(
+                                                        text = if (detail.isNotEmpty()) "$status — $detail" else status,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+                                            if (isBlocked) {
+                                                TextButton(
+                                                    onClick = { com.example.views.relay.RelayHealthTracker.unblockRelay(url) },
+                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                                    modifier = Modifier.height(28.dp)
+                                                ) {
+                                                    Text("Unblock", style = MaterialTheme.typography.labelSmall)
+                                                }
+                                            } else if (isFlagged) {
+                                                TextButton(
+                                                    onClick = { com.example.views.relay.RelayHealthTracker.blockRelay(url) },
+                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                                    modifier = Modifier.height(28.dp),
+                                                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                                ) {
+                                                    Text("Block", style = MaterialTheme.typography.labelSmall)
+                                                }
+                                                TextButton(
+                                                    onClick = { com.example.views.relay.RelayHealthTracker.unflagRelay(url) },
+                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                                    modifier = Modifier.height(28.dp)
+                                                ) {
+                                                    Text("Dismiss", style = MaterialTheme.typography.labelSmall)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Tab Row
                     PrimaryTabRow(
                         selectedTabIndex = selectedTab,
@@ -277,7 +392,7 @@ fun RelayManagementScreen(
                                             url = normalizedUrl,
                                             read = true,
                                             write = true,
-                                            nip11Retriever = nip11Retriever
+                                            nip11Cache = nip11Cache
                                         )
                                         viewModel.addRelayToCategory(category.id, newRelay)
                                         categoryRelayInputs = categoryRelayInputs + (category.id to "")
@@ -389,7 +504,7 @@ fun RelayManagementScreen(
                                             url = normalizedUrl,
                                             read = true,
                                             write = true,
-                                            nip11Retriever = nip11Retriever
+                                            nip11Cache = nip11Cache
                                         )
                                         viewModel.addOutboxRelay(newRelay)
                                         outboxRelayUrl = ""
@@ -430,7 +545,7 @@ fun RelayManagementScreen(
                                             url = normalizedUrl,
                                             read = true,
                                             write = true,
-                                            nip11Retriever = nip11Retriever
+                                            nip11Cache = nip11Cache
                                         )
                                         viewModel.addInboxRelay(newRelay)
                                         inboxRelayUrl = ""
@@ -471,7 +586,7 @@ fun RelayManagementScreen(
                                             url = normalizedUrl,
                                             read = true,
                                             write = true,
-                                            nip11Retriever = nip11Retriever
+                                            nip11Cache = nip11Cache
                                         )
                                         viewModel.addCacheRelay(newRelay)
                                         cacheRelayUrl = ""
@@ -574,7 +689,7 @@ fun RelayManagementScreen(
                             url = "wss://nos.lol",
                             read = true,
                             write = true,
-                            nip11Retriever = nip11Retriever
+                            nip11Cache = nip11Cache
                         )
                         viewModel.addCacheRelay(defaultRelay)
                         showDefaultConfirmation = false

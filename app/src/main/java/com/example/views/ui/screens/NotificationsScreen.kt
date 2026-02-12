@@ -5,6 +5,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import com.example.views.ui.components.cutoutPadding
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.RectangleShape
@@ -26,6 +27,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -112,22 +114,19 @@ private data class NotifTab(
 fun NotificationsScreen(
     onBackClick: () -> Unit,
     onNoteClick: (Note) -> Unit = {},
-    onOpenThreadForRootId: (rootNoteId: String, replyKind: Int, replyNoteId: String?) -> Unit = { _, _, _ -> },
+    onOpenThreadForRootId: (rootNoteId: String, replyKind: Int, replyNoteId: String?, targetNote: Note?) -> Unit = { _, _, _, _ -> },
     onLike: (String) -> Unit = {},
     onShare: (String) -> Unit = {},
     onComment: (String) -> Unit = {},
     onProfileClick: (String) -> Unit = {},
     listState: LazyListState = rememberLazyListState(),
     topAppBarState: TopAppBarState = rememberTopAppBarState(),
+    selectedTabIndex: Int = 0,
+    onTabSelected: (Int) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val allNotifications by NotificationsRepository.notifications.collectAsState(initial = emptyList())
-    val seenIds by NotificationsRepository.seenIds.collectAsState(initial = emptySet())
-
-    // Mark all as seen when user opens the notifications screen
-    LaunchedEffect(Unit) {
-        NotificationsRepository.markAllAsSeen()
-    }
+    val allNotifications by NotificationsRepository.notifications.collectAsState()
+    val seenIds by NotificationsRepository.seenIds.collectAsState()
 
     // Batch-request profiles for all notification and note authors
     val profileCache = ProfileMetadataCache.getInstance()
@@ -144,18 +143,25 @@ fun NotificationsScreen(
         if (authorIds.isNotEmpty()) profileCache.requestProfiles(authorIds, cacheRelayUrls)
     }
 
-    // Tab definitions
+    // Tab definitions (All, Threads, Comments, Likes, Zaps, Reposts, Mentions)
     val tabs = remember {
         listOf(
             NotifTab("All", { Icon(Icons.Default.Notifications, null, modifier = Modifier.size(18.dp)) }) { true },
-            NotifTab("Replies", { Icon(Icons.AutoMirrored.Outlined.Reply, null, modifier = Modifier.size(18.dp)) }) { it.type == NotificationType.REPLY },
+            NotifTab("Replies", { Icon(Icons.AutoMirrored.Outlined.Reply, null, modifier = Modifier.size(18.dp)) }) {
+                it.type == NotificationType.REPLY && (it.replyKind == null || it.replyKind == 1)
+            },
+            NotifTab("Threads", { Icon(Icons.Outlined.Forum, null, modifier = Modifier.size(18.dp)) }) {
+                it.type == NotificationType.REPLY && it.replyKind == 11
+            },
+            NotifTab("Comments", { Icon(Icons.Outlined.ChatBubble, null, modifier = Modifier.size(18.dp)) }) {
+                it.type == NotificationType.REPLY && it.replyKind == 1111
+            },
             NotifTab("Likes", { Icon(Icons.Default.Favorite, null, modifier = Modifier.size(18.dp)) }) { it.type == NotificationType.LIKE },
             NotifTab("Zaps", { Icon(Icons.Default.Bolt, null, modifier = Modifier.size(18.dp)) }) { it.type == NotificationType.ZAP },
             NotifTab("Reposts", { Icon(Icons.Default.Repeat, null, modifier = Modifier.size(18.dp)) }) { it.type == NotificationType.REPOST },
             NotifTab("Mentions", { Icon(Icons.Outlined.AlternateEmail, null, modifier = Modifier.size(18.dp)) }) { it.type == NotificationType.MENTION }
         )
     }
-    var selectedTabIndex by remember { mutableIntStateOf(0) }
 
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(topAppBarState)
 
@@ -164,7 +170,7 @@ fun NotificationsScreen(
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            Column {
+            Column(Modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
                 TopAppBar(
                     scrollBehavior = scrollBehavior,
                     title = {
@@ -178,6 +184,26 @@ fun NotificationsScreen(
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     },
+                    actions = {
+                        val unseenInTab = allNotifications.count { tabs[selectedTabIndex].filter(it) && it.id !in seenIds }
+                        if (unseenInTab > 0) {
+                            IconButton(onClick = {
+                                if (selectedTabIndex == 0) {
+                                    NotificationsRepository.markAllAsSeen()
+                                } else {
+                                    val tabFilter = tabs[selectedTabIndex].filter
+                                    allNotifications.filter(tabFilter).forEach { NotificationsRepository.markAsSeen(it.id) }
+                                }
+                            }) {
+                                Icon(
+                                    Icons.Outlined.DoneAll,
+                                    contentDescription = "Mark all as seen",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    },
+                    windowInsets = WindowInsets(0),
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.surface,
                         scrolledContainerColor = MaterialTheme.colorScheme.surface,
@@ -204,7 +230,7 @@ fun NotificationsScreen(
                         val unseenForTab = allNotifications.count { tab.filter(it) && it.id !in seenIds }
                         Tab(
                             selected = selectedTabIndex == index,
-                            onClick = { selectedTabIndex = index },
+                            onClick = { onTabSelected(index) },
                             text = {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -324,7 +350,7 @@ fun NotificationsScreen(
                                 NotificationsRepository.markAsSeen(notification.id)
                                 when {
                                     notification.type == NotificationType.REPLY && notification.rootNoteId != null ->
-                                        onOpenThreadForRootId(notification.rootNoteId!!, notification.replyKind ?: 1, notification.replyNoteId)
+                                        onOpenThreadForRootId(notification.rootNoteId!!, notification.replyKind ?: 1, notification.replyNoteId, notification.targetNote)
                                     notification.type == NotificationType.MENTION && notification.note != null ->
                                         onNoteClick(notification.note!!)
                                     notification.targetNote != null -> onNoteClick(notification.targetNote!!)
@@ -381,11 +407,21 @@ private fun CompactNotificationRow(
         }
     }
 
+    val compactAccentColor = MaterialTheme.colorScheme.primary
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        color = if (!isSeen) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.08f) else Color.Transparent
+            .clickable(onClick = onClick)
+            .then(
+                if (!isSeen) Modifier.drawBehind {
+                    drawRect(
+                        color = compactAccentColor,
+                        topLeft = androidx.compose.ui.geometry.Offset.Zero,
+                        size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height)
+                    )
+                } else Modifier
+            ),
+        color = if (!isSeen) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.18f) else Color.Transparent
     ) {
         Row(
             modifier = Modifier
@@ -393,17 +429,6 @@ private fun CompactNotificationRow(
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Unseen dot
-            if (!isSeen) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
-                )
-                Spacer(Modifier.width(8.dp))
-            }
-
             // Type icon or custom emoji
             if (hasCustomEmoji) {
                 Text(
@@ -539,31 +564,32 @@ private fun FullNotificationCard(
         else -> MaterialTheme.colorScheme.primary
     }
 
+    val accentColor = MaterialTheme.colorScheme.primary
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        color = if (!isSeen) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.08f) else Color.Transparent
+            .clickable(onClick = onClick)
+            .then(
+                if (!isSeen) Modifier.drawBehind {
+                    drawRect(
+                        color = accentColor,
+                        topLeft = androidx.compose.ui.geometry.Offset.Zero,
+                        size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height)
+                    )
+                } else Modifier
+            ),
+        color = if (!isSeen) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.18f) else Color.Transparent
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            // Header row: unseen dot + type label + timestamp
+            // Header row: type label + timestamp
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (!isSeen) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                }
                 Icon(
                     imageVector = if (notification.type == NotificationType.REPLY) Icons.AutoMirrored.Outlined.Reply else Icons.Outlined.AlternateEmail,
                     contentDescription = null,
@@ -618,22 +644,94 @@ private fun FullNotificationCard(
 
             // Inline reply content
             notification.note?.let { replyNote ->
-                if (replyNote.content.isNotBlank()) {
+                if (replyNote.content.isNotBlank() || replyNote.mediaUrls.isNotEmpty()) {
+                    val imageUrls = replyNote.mediaUrls.filter { com.example.views.utils.UrlDetector.isImageUrl(it) }
+                    val videoUrls = replyNote.mediaUrls.filter { com.example.views.utils.UrlDetector.isVideoUrl(it) }
+                    // Strip media URLs from displayed text and collapse leftover blank lines
+                    val strippedContent = remember(replyNote.content, replyNote.mediaUrls) {
+                        var text = replyNote.content
+                        replyNote.mediaUrls.forEach { url -> text = text.replace(url, "") }
+                        text.lines().filter { it.isNotBlank() }.joinToString("\n").trim()
+                    }
                     Spacer(Modifier.height(8.dp))
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text(
-                            text = replyNote.content,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 4,
-                            overflow = TextOverflow.Ellipsis,
-                            lineHeight = 18.sp,
-                            modifier = Modifier.padding(10.dp)
-                        )
+                        Column {
+                            if (strippedContent.isNotBlank()) {
+                                Text(
+                                    text = strippedContent,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 4,
+                                    overflow = TextOverflow.Ellipsis,
+                                    lineHeight = 18.sp,
+                                    modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 10.dp)
+                                )
+                            }
+                            // Embedded media — sits inside the Surface so background extends behind it
+                            if (imageUrls.size == 1 && videoUrls.isEmpty()) {
+                                // Single image — full-width, flush with Surface edges
+                                if (strippedContent.isNotBlank()) Spacer(Modifier.height(6.dp))
+                                AsyncImage(
+                                    model = imageUrls[0],
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 160.dp)
+                                )
+                            } else if (imageUrls.isNotEmpty() || videoUrls.isNotEmpty()) {
+                                // Multiple media — thumbnail row
+                                if (strippedContent.isNotBlank()) Spacer(Modifier.height(6.dp))
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp)
+                                ) {
+                                    imageUrls.take(3).forEach { url ->
+                                        AsyncImage(
+                                            model = url,
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .size(56.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                        )
+                                    }
+                                    videoUrls.take(2).forEach { _ ->
+                                        Box(
+                                            modifier = Modifier
+                                                .size(56.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.PlayArrow,
+                                                contentDescription = "Video",
+                                                modifier = Modifier.size(24.dp),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            // Hashtags
+                            if (replyNote.hashtags.isNotEmpty()) {
+                                Text(
+                                    text = replyNote.hashtags.joinToString(" ") { "#$it" },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF8FBC8F),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 4.dp)
+                                )
+                            }
+                            // Bottom padding for the Surface
+                            Spacer(Modifier.height(10.dp))
+                        }
                     }
                 }
             }
@@ -660,6 +758,16 @@ private fun FullNotificationCard(
                         overflow = TextOverflow.Ellipsis,
                         lineHeight = 16.sp
                     )
+                    // Small media indicator for target note
+                    if (target.mediaUrls.isNotEmpty()) {
+                        Spacer(Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Outlined.Image,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
                 }
             }
         }

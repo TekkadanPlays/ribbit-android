@@ -1,6 +1,7 @@
 package com.example.views.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -9,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.QrCode2
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,6 +39,7 @@ fun GlobalSidebar(
     onItemClick: (String) -> Unit,
     onToggleCategory: (String) -> Unit = {},
     onQrClick: () -> Unit = {},
+    onSettingsClick: () -> Unit = {},
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
@@ -57,6 +60,7 @@ fun GlobalSidebar(
                     onItemClick = onItemClick,
                     onToggleCategory = onToggleCategory,
                     onQrClick = onQrClick,
+                    onSettingsClick = onSettingsClick,
                     onClose = {
                         scope.launch {
                             drawerState.close()
@@ -83,6 +87,7 @@ private fun DrawerContent(
     onItemClick: (String) -> Unit,
     onToggleCategory: (String) -> Unit,
     onQrClick: () -> Unit = {},
+    onSettingsClick: () -> Unit = {},
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -125,6 +130,18 @@ private fun DrawerContent(
                 Icon(
                     imageVector = Icons.Outlined.QrCode2,
                     contentDescription = "My QR code"
+                )
+            }
+            IconButton(
+                onClick = {
+                    onSettingsClick()
+                    onClose()
+                },
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Settings,
+                    contentDescription = "Settings"
                 )
             }
         }
@@ -326,7 +343,17 @@ private fun RelayCategoriesSection(
                         modifier = Modifier.padding(start = 28.dp, end = 28.dp, top = 8.dp, bottom = 8.dp)
                     )
                 } else {
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    val nip11Cache = remember { com.example.views.cache.Nip11CacheManager.getInstance(context) }
                     category.relays.forEach { relay ->
+                        val relayConnected = connectionStatus[relay.url] == RelayConnectionStatus.CONNECTED
+                        // Load NIP-11 info from cache (async fetch if missing)
+                        var relayInfo by remember(relay.url) { mutableStateOf(nip11Cache.getCachedRelayInfo(relay.url)) }
+                        LaunchedEffect(relay.url) {
+                            if (relayInfo == null) {
+                                relayInfo = nip11Cache.getRelayInfo(relay.url)
+                            }
+                        }
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -336,24 +363,88 @@ private fun RelayCategoriesSection(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(start = 48.dp, end = 28.dp, top = 8.dp, bottom = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(start = 40.dp, end = 20.dp, top = 8.dp, bottom = 8.dp),
+                                verticalAlignment = Alignment.Top
                             ) {
-                                val relayConnected = connectionStatus[relay.url] == RelayConnectionStatus.CONNECTED
-                                Icon(
-                                    imageVector = Icons.Default.Circle,
-                                    contentDescription = if (relayConnected) "Connected" else "Disconnected",
-                                    modifier = Modifier.size(6.dp),
-                                    tint = if (relayConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text(
-                                    text = relay.displayName,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                )
+                                // Relay icon (favicon or NIP-11 icon)
+                                val iconUrl = relayInfo?.icon ?: relayInfo?.image
+                                if (iconUrl != null) {
+                                    coil.compose.AsyncImage(
+                                        model = iconUrl,
+                                        contentDescription = "Relay icon",
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                    )
+                                } else {
+                                    // Connection status dot as fallback
+                                    Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Circle,
+                                            contentDescription = if (relayConnected) "Connected" else "Disconnected",
+                                            modifier = Modifier.size(6.dp),
+                                            tint = if (relayConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = relayInfo?.name ?: relay.displayName,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Circle,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(6.dp),
+                                            tint = if (relayConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    // Description
+                                    val desc = relayInfo?.description
+                                    if (!desc.isNullOrBlank()) {
+                                        Text(
+                                            text = desc,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        )
+                                    }
+                                    // Supported NIPs
+                                    val nips = relayInfo?.supported_nips
+                                    if (!nips.isNullOrEmpty()) {
+                                        Text(
+                                            text = "NIPs: ${nips.sorted().joinToString(", ")}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        )
+                                    }
+                                    // Software + version
+                                    val sw = relayInfo?.software?.substringAfterLast("/")
+                                    val ver = relayInfo?.version
+                                    if (sw != null || ver != null) {
+                                        Text(
+                                            text = listOfNotNull(sw, ver).joinToString(" v"),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                            maxLines = 1,
+                                            modifier = Modifier.padding(top = 1.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

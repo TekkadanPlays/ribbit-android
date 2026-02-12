@@ -59,6 +59,7 @@ fun LiveActivityRow(
         exit = shrinkVertically() + fadeOut()
     ) {
         Column(modifier = modifier.fillMaxWidth()) {
+            Spacer(Modifier.height(2.dp))
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -74,7 +75,7 @@ fun LiveActivityRow(
                     )
                 }
             }
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(2.dp))
         }
     }
 }

@@ -21,8 +21,12 @@ import java.util.concurrent.CopyOnWriteArrayList
 object ContactListRepository {
 
     private const val TAG = "ContactListRepository"
-    /** Collect window so multiple relays can respond; we then pick latest by createdAt. */
-    private const val KIND3_FETCH_TIMEOUT_MS = 2500L
+    /** Max wait for kind-3 responses; early-exit fires sooner when first event arrives. */
+    private const val KIND3_FETCH_TIMEOUT_MS = 1800L
+    /** After first kind-3 event arrives, wait this long for more relays before returning. */
+    private const val KIND3_SETTLE_MS = 500L
+    /** Priority relays for kind-3 (NIP-65 profile/contact caches). */
+    private val KIND3_PRIORITY_RELAYS = listOf("wss://purplepag.es", "wss://user.kindpag.es")
     /** Cache TTL: 2 min so we don't rely on stale follow lists; forceRefresh on Following pull. */
     private const val CACHE_TTL_MS = 2 * 60 * 1000L
 
@@ -33,6 +37,9 @@ object ContactListRepository {
     /** The raw kind-3 Event most recently fetched for the current user, used to build follow/unfollow updates. */
     @Volatile
     private var latestKind3Event: Event? = null
+
+    /** In-flight deduplication: only one network fetch per pubkey at a time. */
+    private val inFlightFetches = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Deferred<Set<String>>>()
 
     /**
      * Return cached follow list if present and not stale. Lock-free read.
@@ -65,8 +72,22 @@ object ContactListRepository {
                 return cached
             }
         }
-        val distinctUrls = relayUrls.distinct()
-        Log.d(TAG, "Fetching kind-3 for ${pubkey.take(8)}... from ${distinctUrls.size} relay(s) (include write/outbox relays for latest list)")
+
+        // Deduplicate concurrent fetches: if another coroutine is already fetching, wait for it
+        val existing = inFlightFetches[pubkey]
+        if (existing != null) {
+            Log.d(TAG, "Kind-3 fetch already in-flight for ${pubkey.take(8)}..., waiting")
+            return try { existing.await() } catch (_: Exception) { emptySet() }
+        }
+
+        val deferred = kotlinx.coroutines.CompletableDeferred<Set<String>>()
+        val prev = inFlightFetches.putIfAbsent(pubkey, deferred)
+        if (prev != null) {
+            // Another coroutine won the race
+            return try { prev.await() } catch (_: Exception) { emptySet() }
+        }
+        val distinctUrls = (KIND3_PRIORITY_RELAYS + relayUrls).distinct()
+        Log.d(TAG, "Fetching kind-3 for ${pubkey.take(8)}... from ${distinctUrls.size} relay(s)")
         return try {
             val filter = Filter(
                 kinds = listOf(3),
@@ -74,11 +95,21 @@ object ContactListRepository {
                 limit = 20
             )
             val collected = CopyOnWriteArrayList<Event>()
+            val firstEventAt = java.util.concurrent.atomic.AtomicLong(0)
             val stateMachine = RelayConnectionStateMachine.getInstance()
             val handle = stateMachine.requestTemporarySubscription(distinctUrls, filter) { event ->
-                if (event.kind == 3) collected.add(event)
+                if (event.kind == 3) {
+                    collected.add(event)
+                    firstEventAt.compareAndSet(0, System.currentTimeMillis())
+                }
             }
-            delay(KIND3_FETCH_TIMEOUT_MS)
+            // Early-exit: poll every 100ms; once first event arrives, wait settle window then return
+            val deadline = System.currentTimeMillis() + KIND3_FETCH_TIMEOUT_MS
+            while (System.currentTimeMillis() < deadline) {
+                delay(100)
+                val firstAt = firstEventAt.get()
+                if (firstAt > 0 && System.currentTimeMillis() - firstAt >= KIND3_SETTLE_MS) break
+            }
             handle.cancel()
             val event = collected.maxByOrNull { it.createdAt } ?: return emptySet()
             latestKind3Event = event
@@ -92,10 +123,15 @@ object ContactListRepository {
                 .toSet()
             cacheEntry = CacheEntry(pubkey, pubkeys, System.currentTimeMillis())
             Log.d(TAG, "Kind-3 parsed ${pubkeys.size} follows for ${pubkey.take(8)}...")
+            deferred.complete(pubkeys)
             pubkeys
         } catch (e: Exception) {
             Log.e(TAG, "Kind-3 fetch failed: ${e.message}", e)
-            getCachedFollowList(pubkey) ?: emptySet()
+            val fallback = getCachedFollowList(pubkey) ?: emptySet()
+            deferred.complete(fallback)
+            fallback
+        } finally {
+            inFlightFetches.remove(pubkey)
         }
     }
 

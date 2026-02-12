@@ -41,9 +41,16 @@ data class Note(
     val topicTitle: String? = null,
     /** Raw event tags for NIP-22 I tags (anchors), NIP-10 e tags, etc. Each tag is an array of strings. */
     val tags: List<List<String>> = emptyList(),
-    /** Author who reposted this note (kind-6); when non-null, NoteCard shows "🔁 reposted by X" header. */
-    val repostedBy: Author? = null
-)
+    /** Original note event ID for reposts; used to deduplicate multiple boosts of the same note. */
+    val originalNoteId: String? = null,
+    /** Authors who reposted this note (kind-6); when non-empty, NoteCard shows repost label. */
+    val repostedByAuthors: List<Author> = emptyList(),
+    /** Timestamp (ms) of the latest repost event (kind-6 created_at); null for non-reposts. */
+    val repostTimestamp: Long? = null
+) {
+    /** First (most recent) reposter, or null if not a repost. Convenience for UI. */
+    val repostedBy: Author? get() = repostedByAuthors.firstOrNull()
+}
 
 @Immutable
 @Serializable

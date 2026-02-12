@@ -2,8 +2,12 @@ package com.example.views.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.pager.HorizontalPager
+import com.example.views.ui.components.cutoutPadding
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -13,6 +17,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
@@ -36,6 +41,9 @@ fun VideoContentViewerScreen(
         initialPage = initialIndex.coerceIn(0, urls.size - 1)
     )
 
+    // Consume back gesture so it only closes the viewer without animation
+    BackHandler(onBack = onBackClick)
+
     Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         HorizontalPager(
             state = pagerState,
@@ -43,6 +51,7 @@ fun VideoContentViewerScreen(
             userScrollEnabled = true
         ) { page ->
             val url = urls[page]
+            val isCurrentPage = pagerState.currentPage == page
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -50,26 +59,31 @@ fun VideoContentViewerScreen(
                 InlineVideoPlayer(
                     url = url,
                     modifier = Modifier.fillMaxSize(),
-                    autoPlay = true
+                    autoPlay = true,
+                    isVisible = isCurrentPage,
+                    onExitFullscreen = onBackClick
                 )
             }
         }
 
-        TopAppBar(
-            title = { },
-            navigationIcon = {
-                IconButton(onClick = onBackClick) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back"
-                    )
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-                navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
-                actionIconContentColor = MaterialTheme.colorScheme.onSurface
+        Column(Modifier.statusBarsPadding()) {
+            TopAppBar(
+                title = { },
+                navigationIcon = {
+                    IconButton(onClick = onBackClick) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                },
+                windowInsets = WindowInsets(0),
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+                    actionIconContentColor = MaterialTheme.colorScheme.onSurface
+                )
             )
-        )
+        }
     }
 }

@@ -134,15 +134,15 @@ fun Kind1LinkEmbedBlock(
             }
         }
 
-        // Bottom section (inside border): description + link
-        if (previewInfo.description.isNotEmpty() || previewInfo.url.isNotEmpty()) {
+        // Bottom section (inside border): description + link — only in thread view
+        if (inThreadView && (previewInfo.description.isNotEmpty() || previewInfo.url.isNotEmpty())) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 0.dp),
                 color = Color.Transparent,
-                shape = RoundedCornerShape(4.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                shape = RectangleShape,
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Column(modifier = Modifier.padding(10.dp)) {
                     if (previewInfo.description.isNotEmpty()) {

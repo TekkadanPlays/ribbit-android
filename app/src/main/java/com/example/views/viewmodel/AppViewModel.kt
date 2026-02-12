@@ -9,6 +9,7 @@ import com.example.views.data.Note
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class AppState(
@@ -38,7 +39,9 @@ data class AppState(
     /** Shared media album page index per note ID so album position persists across feed/thread/viewer. */
     val mediaPageByNoteId: Map<String, Int> = emptyMap(),
     /** Note being replied to (shown at top of reply compose screen). Cleared after navigation. */
-    val replyToNote: Note? = null
+    val replyToNote: Note? = null,
+    /** Notes stored by ID for thread navigation (supports stacked threads). */
+    val notesById: Map<String, Note> = emptyMap()
 )
 
 class AppViewModel : ViewModel() {
@@ -46,97 +49,102 @@ class AppViewModel : ViewModel() {
     val appState: StateFlow<AppState> = _appState.asStateFlow()
 
     fun updateCurrentScreen(screen: String) {
-        _appState.value = _appState.value.copy(currentScreen = screen)
+        _appState.update { it.copy(currentScreen = screen) }
     }
 
     fun updateSearchMode(isSearchMode: Boolean) {
-        _appState.value = _appState.value.copy(isSearchMode = isSearchMode)
+        _appState.update { it.copy(isSearchMode = isSearchMode) }
     }
 
     fun updateSelectedAuthor(author: Author?) {
-        _appState.value = _appState.value.copy(selectedAuthor = author)
+        _appState.update { it.copy(selectedAuthor = author) }
     }
 
     fun updateSelectedNote(note: Note?) {
-        _appState.value = _appState.value.copy(selectedNote = note)
+        _appState.update { it.copy(selectedNote = note, notesById = if (note != null) it.notesById + (note.id to note) else it.notesById) }
+    }
+
+    /** Store a note by ID for thread navigation without changing selectedNote. */
+    fun storeNoteForThread(note: Note) {
+        _appState.update { it.copy(notesById = it.notesById + (note.id to note)) }
     }
 
     fun updatePreviousScreen(screen: String?) {
-        _appState.value = _appState.value.copy(previousScreen = screen)
+        _appState.update { it.copy(previousScreen = screen) }
     }
 
     fun updateThreadSourceScreen(screen: String?) {
-        _appState.value = _appState.value.copy(threadSourceScreen = screen)
+        _appState.update { it.copy(threadSourceScreen = screen) }
     }
 
     fun updateThreadRelayUrls(urls: List<String>?) {
-        _appState.value = _appState.value.copy(threadRelayUrls = urls)
+        _appState.update { it.copy(threadRelayUrls = urls) }
     }
 
     fun openImageViewer(urls: List<String>, initialIndex: Int = 0) {
-        _appState.value = _appState.value.copy(imageViewerUrls = urls, imageViewerInitialIndex = initialIndex.coerceIn(0, urls.size - 1))
+        _appState.update { it.copy(imageViewerUrls = urls, imageViewerInitialIndex = initialIndex.coerceIn(0, urls.size - 1)) }
     }
 
     fun clearImageViewer() {
-        _appState.value = _appState.value.copy(imageViewerUrls = null, imageViewerInitialIndex = 0)
+        _appState.update { it.copy(imageViewerUrls = null, imageViewerInitialIndex = 0) }
     }
 
     fun setReplyToNote(note: Note?) {
-        _appState.value = _appState.value.copy(replyToNote = note)
+        _appState.update { it.copy(replyToNote = note) }
     }
 
     fun openVideoViewer(urls: List<String>, initialIndex: Int = 0) {
-        _appState.value = _appState.value.copy(videoViewerUrls = urls, videoViewerInitialIndex = initialIndex.coerceIn(0, urls.size - 1))
+        _appState.update { it.copy(videoViewerUrls = urls, videoViewerInitialIndex = initialIndex.coerceIn(0, urls.size - 1)) }
     }
 
     fun clearVideoViewer() {
-        _appState.value = _appState.value.copy(videoViewerUrls = null, videoViewerInitialIndex = 0)
+        _appState.update { it.copy(videoViewerUrls = null, videoViewerInitialIndex = 0) }
     }
 
     /** Store the current album page for a note so it persists across feed/thread/viewer. */
     fun updateMediaPage(noteId: String, page: Int) {
         val current = _appState.value.mediaPageByNoteId
         if (current[noteId] != page) {
-            _appState.value = _appState.value.copy(mediaPageByNoteId = current + (noteId to page))
+            _appState.update { it.copy(mediaPageByNoteId = it.mediaPageByNoteId + (noteId to page)) }
         }
     }
 
     fun getMediaPage(noteId: String): Int = _appState.value.mediaPageByNoteId[noteId] ?: 0
 
     fun updateThreadScrollPosition(position: Int) {
-        _appState.value = _appState.value.copy(threadScrollPosition = position)
+        _appState.update { it.copy(threadScrollPosition = position) }
     }
 
     fun updateThreadExpandedComments(comments: Set<String>) {
-        _appState.value = _appState.value.copy(threadExpandedComments = comments)
+        _appState.update { it.copy(threadExpandedComments = comments) }
     }
 
     fun updateThreadExpandedControls(commentId: String?) {
-        _appState.value = _appState.value.copy(threadExpandedControls = commentId)
+        _appState.update { it.copy(threadExpandedControls = commentId) }
     }
 
     fun updateFeedScrollPosition(position: Int) {
-        _appState.value = _appState.value.copy(feedScrollPosition = position)
+        _appState.update { it.copy(feedScrollPosition = position) }
     }
 
     fun updateProfileScrollPosition(position: Int) {
-        _appState.value = _appState.value.copy(profileScrollPosition = position)
+        _appState.update { it.copy(profileScrollPosition = position) }
     }
 
     fun updateUserProfileScrollPosition(position: Int) {
-        _appState.value = _appState.value.copy(userProfileScrollPosition = position)
+        _appState.update { it.copy(userProfileScrollPosition = position) }
     }
 
     fun updateBackPressCount(count: Int) {
-        _appState.value = _appState.value.copy(backPressCount = count)
+        _appState.update { it.copy(backPressCount = count) }
     }
 
     fun updateShowExitSnackbar(show: Boolean) {
-        _appState.value = _appState.value.copy(showExitSnackbar = show)
+        _appState.update { it.copy(showExitSnackbar = show) }
     }
 
     fun updateExitWindowActive(isActive: Boolean) {
-        _appState.value = _appState.value.copy(isExitWindowActive = isActive)
+        _appState.update { it.copy(isExitWindowActive = isActive) }
     }
 
     fun resetToDashboard() {

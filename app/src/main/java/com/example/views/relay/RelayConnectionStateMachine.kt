@@ -11,6 +11,7 @@ import com.vitorpamplona.quartz.nip01Core.relay.client.single.IRelayClient
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
 import com.vitorpamplona.quartz.nip01Core.relay.normalizer.NormalizedRelayUrl
 import com.vitorpamplona.quartz.nip01Core.relay.sockets.okhttp.BasicOkHttpWebSocket
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -135,7 +136,7 @@ sealed class RelaySideEffect {
  */
 class RelayConnectionStateMachine {
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, t -> Log.e(TAG, "Coroutine failed: ${t.message}", t) })
     private val okHttpClient = OkHttpClient.Builder().build()
     private val socketBuilder = BasicOkHttpWebSocket.Builder { _ -> okHttpClient }
     val nostrClient: NostrClient = NostrClient(socketBuilder, scope)
@@ -150,11 +151,13 @@ class RelayConnectionStateMachine {
                 if (url in current) {
                     _perRelayState.value = current + (url to RelayEndpointStatus.Connecting)
                 }
+                RelayHealthTracker.recordConnectionAttempt(url)
             }
 
             override fun onConnected(relay: IRelayClient, pingMillis: Int, compressed: Boolean) {
                 val url = relay.url.url
                 _perRelayState.value = _perRelayState.value + (url to RelayEndpointStatus.Connected)
+                RelayHealthTracker.recordConnectionSuccess(url)
             }
 
             override fun onDisconnected(relay: IRelayClient) {
@@ -171,6 +174,7 @@ class RelayConnectionStateMachine {
                 if (url in current) {
                     _perRelayState.value = current + (url to RelayEndpointStatus.Failed)
                 }
+                RelayHealthTracker.recordConnectionFailure(url, errorMessage)
             }
         })
     }
@@ -329,6 +333,7 @@ class RelayConnectionStateMachine {
         if (relayUrls.isEmpty()) return
         relayUrls.forEach { RelayLogBuffer.logConnecting(it) }
         scope.launch {
+            android.os.Trace.beginSection("Relay.connectRelays(${relayUrls.size})")
             try {
                 // Bootstrap subscription so NostrClient adds relays to pool, then connect
                 val bootstrapFilter = Filter(kinds = listOf(1), limit = 1)
@@ -350,6 +355,8 @@ class RelayConnectionStateMachine {
                 relayUrls.forEach { RelayLogBuffer.logError(it, e.message ?: "Connection failed") }
                 _connectionError.value = ConnectionError(e.message, true)
                 stateMachine.transition(RelayEvent.ConnectFailed(e.message))
+            } finally {
+                android.os.Trace.endSection()
             }
         }
     }
@@ -380,27 +387,29 @@ class RelayConnectionStateMachine {
         countsNoteIds: Set<String>? = null
     ) {
         scope.launch {
+            android.os.Trace.beginSection("Relay.updateSubscription(${relayUrls.size})")
             try {
                 currentSubId?.let { nostrClient.close(it) }
                 currentSubId = null
                 mainFeedSubscription?.destroy()
                 mainFeedSubscription = null
-                if (relayUrls.isEmpty()) return@launch
-                _perRelayState.value = relayUrls.associateWith { RelayEndpointStatus.Connecting }
+                val effectiveRelayUrls = RelayHealthTracker.filterBlocked(relayUrls)
+                if (effectiveRelayUrls.isEmpty()) { android.os.Trace.endSection(); return@launch }
+                _perRelayState.value = effectiveRelayUrls.associateWith { RelayEndpointStatus.Connecting }
                 val relayFilters: Map<NormalizedRelayUrl, List<Filter>>
                 if (customFilter != null && customOnEvent != null) {
-                    relayFilters = relayUrls.associate { NormalizedRelayUrl(it) to listOf(customFilter) }
+                    relayFilters = effectiveRelayUrls.associate { NormalizedRelayUrl(it) to listOf(customFilter) }
                     val onEvent = customOnEvent
                     mainFeedSubscription = NostrClientSubscription(
                         client = nostrClient,
                         filter = { relayFilters },
                         onEvent = onEvent
                     )
-                    currentSubscriptionRelayUrls = relayUrls
+                    currentSubscriptionRelayUrls = effectiveRelayUrls
                     currentKind1Filter = null
                     currentCountsNoteIds = emptySet()
-                    _currentSubscription.value = CurrentSubscription(relayUrls, null, emptySet())
-                    Log.d(TAG, "Subscription updated for ${relayUrls.size} relays (custom filter)")
+                    _currentSubscription.value = CurrentSubscription(effectiveRelayUrls, null, emptySet())
+                    Log.d(TAG, "Subscription updated for ${effectiveRelayUrls.size} relays (custom filter)")
                 } else {
                     val sevenDaysAgo = System.currentTimeMillis() / 1000 - 86400 * 7
                     val filterKind1 = kind1Filter ?: Filter(
@@ -417,12 +426,20 @@ class RelayConnectionStateMachine {
                     val filterKind11 = Filter(kinds = listOf(11), limit = 100, since = sevenDaysAgo)
                     val filterKind1011 = Filter(kinds = listOf(1011), limit = 200, since = sevenDaysAgo)
                     val filterKind30311 = Filter(kinds = listOf(30311), limit = 50)
-                    // Counts (kind-7, kind-9735) are now handled by NoteCountsRepository via
-                    // a dedicated temporary subscription to NIP-65 indexer relays. We no longer
-                    // piggyback counts filters on the main feed subscription.
+                    // Counts (kind-7, kind-9735): piggyback on main feed subscription.
+                    // A separate NostrClientSubscription doesn't receive events (Quartz relay
+                    // pool routing limitation), so we include counts filters here where the
+                    // relay is already connected and proven to deliver events.
                     val countsIds = countsNoteIds?.takeIf { it.isNotEmpty() } ?: emptySet()
-                    val allFilters = listOf(filterKind1, filterKind6, filterKind11, filterKind1011, filterKind30311)
-                    relayFilters = relayUrls.associate { NormalizedRelayUrl(it) to allFilters }
+                    val countsFilters = if (countsIds.isNotEmpty()) {
+                        val noteIdList = countsIds.take(200).toList()
+                        listOf(
+                            Filter(kinds = listOf(7), tags = mapOf("e" to noteIdList)),
+                            Filter(kinds = listOf(9735), tags = mapOf("e" to noteIdList))
+                        )
+                    } else emptyList()
+                    val allFilters = listOf(filterKind1, filterKind6, filterKind11, filterKind1011, filterKind30311) + countsFilters
+                    relayFilters = effectiveRelayUrls.associate { NormalizedRelayUrl(it) to allFilters }
                     currentSubId = RandomInstance.randomChars(10)
                     val subId = currentSubId!!
                     nostrClient.openReqSubscription(subId, relayFilters, object : IRequestListener {
@@ -437,12 +454,8 @@ class RelayConnectionStateMachine {
                             when (event.kind) {
                                 1 -> {
                                     onKind1WithRelay?.invoke(event, relay.url)
-                                    if (countsIds.isNotEmpty()) {
-                                        val rootId = com.example.views.utils.Nip10ReplyDetector.getRootId(event)
-                                        if (rootId != null && rootId in countsIds) {
-                                            com.example.views.repository.ReplyCountCache.incrementForReply(event.id, rootId)
-                                        }
-                                    }
+                                    // Route to NoteCountsRepository for real-time reply counting
+                                    com.example.views.repository.NoteCountsRepository.onLiveEvent(event)
                                 }
                                 6 -> onKind6WithRelay?.invoke(event, relay.url)
                                 11 -> onKind11?.invoke(event, relay.url)
@@ -455,12 +468,12 @@ class RelayConnectionStateMachine {
                         }
                     })
                     val mode = if (kind1Filter != null) "following (authors filter)" else "global"
-                    Log.d(TAG, "Subscription updated for ${relayUrls.size} relays (kind-1 + kind-11${if (countsIds.isNotEmpty()) " + counts(${countsIds.size})" else ""}, $mode)")
+                    Log.d(TAG, "Subscription updated for ${effectiveRelayUrls.size} relays (kind-1 + kind-11${if (countsIds.isNotEmpty()) " + counts(${countsIds.size})" else ""}, $mode)")
                 }
-                currentSubscriptionRelayUrls = relayUrls
+                currentSubscriptionRelayUrls = effectiveRelayUrls
                 currentKind1Filter = kind1Filter
                 currentCountsNoteIds = countsNoteIds?.toSet() ?: emptySet()
-                _currentSubscription.value = CurrentSubscription(relayUrls, kind1Filter, currentCountsNoteIds)
+                _currentSubscription.value = CurrentSubscription(effectiveRelayUrls, kind1Filter, currentCountsNoteIds)
                 _connectionError.value = null
                 retryAttempt = 0
                 nostrClient.connect()
@@ -469,6 +482,8 @@ class RelayConnectionStateMachine {
                 _connectionError.value = ConnectionError(e.message, false)
                 _perRelayState.value = _perRelayState.value.mapValues { RelayEndpointStatus.Failed }
                 stateMachine.transition(RelayEvent.ConnectFailed(e.message))
+            } finally {
+                android.os.Trace.endSection()
             }
         }
     }
@@ -685,6 +700,26 @@ class RelayConnectionStateMachine {
     ): TemporarySubscriptionHandle {
         if (relayUrls.isEmpty() || filters.isEmpty()) return NoOpTemporaryHandle
         val relayFilters = relayUrls.associate { NormalizedRelayUrl(it) to filters }
+        val subscription = NostrClientSubscription(
+            client = nostrClient,
+            filter = { relayFilters },
+            onEvent = onEvent
+        )
+        nostrClient.connect()
+        return TemporarySubscriptionHandleImpl(subscription)
+    }
+
+    /**
+     * One-off subscription with per-relay filter maps (outbox model).
+     * Each relay gets its own set of filters based on which notes it knows about.
+     * Used by NoteCountsRepository to send kind-7/9735 filters to the relays
+     * where each note was actually seen.
+     */
+    fun requestTemporarySubscriptionPerRelay(
+        relayFilters: Map<NormalizedRelayUrl, List<Filter>>,
+        onEvent: (Event) -> Unit
+    ): TemporarySubscriptionHandle {
+        if (relayFilters.isEmpty()) return NoOpTemporaryHandle
         val subscription = NostrClientSubscription(
             client = nostrClient,
             filter = { relayFilters },

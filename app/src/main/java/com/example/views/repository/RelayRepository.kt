@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -17,7 +18,7 @@ import com.example.views.data.UserRelay
 import com.example.views.data.RelayInformation
 import com.example.views.data.RelayConnectionStatus
 import com.example.views.data.RelayHealth
-import com.example.views.cache.nip11.Nip11CachedRetriever
+import com.example.views.cache.Nip11CacheManager
 import com.example.views.relay.RelayConnectionStateMachine
 import com.vitorpamplona.quartz.nip01Core.core.Event
 import com.vitorpamplona.quartz.nip01Core.relay.filters.Filter
@@ -45,15 +46,16 @@ class RelayRepository(private val context: Context) {
         .readTimeout(10, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
         .build()
-    private val nip11Retriever = Nip11CachedRetriever(httpClient)
+    private val nip11Cache = Nip11CacheManager.getInstance(context)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, t -> Log.e(TAG, "Coroutine failed: ${t.message}", t) })
 
     // StateFlow for reactive UI updates
     private val _relays = MutableStateFlow<List<UserRelay>>(emptyList())
-    val relays: StateFlow<List<UserRelay>> = _relays
+    val relays: StateFlow<List<UserRelay>> = _relays.asStateFlow()
 
     // StateFlow for connection status updates
     private val _connectionStatus = MutableStateFlow<Map<String, RelayConnectionStatus>>(emptyMap())
-    val connectionStatus: StateFlow<Map<String, RelayConnectionStatus>> = _connectionStatus
+    val connectionStatus: StateFlow<Map<String, RelayConnectionStatus>> = _connectionStatus.asStateFlow()
 
     init {
         loadRelaysFromStorage()
@@ -75,8 +77,8 @@ class RelayRepository(private val context: Context) {
                 return@withContext Result.failure(Exception("Relay already exists"))
             }
 
-            // Get cached NIP-11 info immediately (returns empty state if not cached)
-            val cachedInfo = nip11Retriever.getFromCache(normalizedUrl)
+            // Get cached NIP-11 info immediately (returns null if not cached)
+            val cachedInfo = nip11Cache.getCachedRelayInfo(normalizedUrl)
 
             // Create new relay with cached/empty NIP-11 info
             val newRelay = UserRelay(
@@ -99,11 +101,10 @@ class RelayRepository(private val context: Context) {
             Log.d(TAG, "✅ Added relay: $normalizedUrl (loading NIP-11 info)")
 
             // Fetch fresh NIP-11 information immediately in background
-            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                nip11Retriever.loadRelayInfo(
-                    relayUrl = normalizedUrl,
-                    onInfo = { freshInfo ->
-                        // Update the relay with fresh NIP-11 info
+            scope.launch {
+                try {
+                    val freshInfo = nip11Cache.getRelayInfo(normalizedUrl, forceRefresh = true)
+                    if (freshInfo != null) {
                         val currentRelays = _relays.value
                         val relayIndex = currentRelays.indexOfFirst { it.url == normalizedUrl }
                         if (relayIndex != -1) {
@@ -119,11 +120,10 @@ class RelayRepository(private val context: Context) {
                             saveRelaysToStorage(updatedList)
                             Log.d(TAG, "✅ Updated relay with fresh NIP-11 info: $normalizedUrl")
                         }
-                    },
-                    onError = { url, errorCode, errorMsg ->
-                        Log.w(TAG, "⚠️ Failed to fetch NIP-11 info for $url: $errorCode - $errorMsg")
                     }
-                )
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠️ Failed to fetch NIP-11 info for $normalizedUrl: ${e.message}")
+                }
             }
 
             Result.success(newRelay)
@@ -201,17 +201,13 @@ class RelayRepository(private val context: Context) {
 
             val relay = existingRelays[relayIndex]
 
-            // Force refresh from NIP-11 retriever
-            var freshInfo: RelayInformation? = null
-            nip11Retriever.forceRefresh(
-                relayUrl = url,
-                onInfo = { info ->
-                    freshInfo = info
-                },
-                onError = { _, errorCode, errorMsg ->
-                    Log.w(TAG, "⚠️ Failed to force refresh $url: $errorCode - $errorMsg")
-                }
-            )
+            // Force refresh from NIP-11 cache
+            val freshInfo = try {
+                nip11Cache.getRelayInfo(url, forceRefresh = true)
+            } catch (e: Exception) {
+                Log.w(TAG, "⚠️ Failed to force refresh $url: ${e.message}")
+                null
+            }
 
             val updatedRelay = relay.copy(
                 info = freshInfo ?: relay.info,
@@ -279,18 +275,18 @@ class RelayRepository(private val context: Context) {
     }
 
     /**
-     * Get NIP-11 cached retriever for external access
+     * Get NIP-11 cache manager for external access
      */
-    fun getNip11Retriever(): Nip11CachedRetriever = nip11Retriever
+    fun getNip11Cache(): Nip11CacheManager = nip11Cache
 
     /**
      * Preload NIP-11 information for existing relays
      */
     private fun preloadRelayInfo() {
-        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+        scope.launch {
             try {
                 // Small delay to let the app initialize
-                kotlinx.coroutines.delay(2000)
+                delay(2000)
 
                 // Preload relay info for current relays
                 val currentRelays = _relays.value
@@ -298,7 +294,7 @@ class RelayRepository(private val context: Context) {
 
                 currentRelays.forEach { relay ->
                     try {
-                        nip11Retriever.preload(relay.url)
+                        nip11Cache.getRelayInfo(relay.url)
                     } catch (e: Exception) {
                         Log.w(TAG, "⚠️ Failed to preload ${relay.url}: ${e.message}")
                     }

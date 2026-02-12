@@ -1,5 +1,7 @@
 package com.example.views.ui.screens
 
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
@@ -50,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import com.example.views.data.Author
 import com.example.views.data.Comment
@@ -67,7 +70,6 @@ import com.example.views.ui.components.BottomNavigationBar
 import com.example.views.repository.ZapType
 import com.example.views.ui.components.NoteCard
 import com.example.views.ui.components.ProfilePicture
-import com.example.views.ui.components.RelayInfoDialog
 import com.example.views.ui.components.RelayOrbs
 import com.example.views.ui.components.ZapButtonWithMenu
 import com.example.views.ui.components.ZapMenuRow
@@ -167,6 +169,8 @@ fun ModernThreadViewScreen(
     onShare: (String) -> Unit = {},
     onComment: (String) -> Unit = {},
     onProfileClick: (String) -> Unit = {},
+    /** Navigate to a different note's thread (e.g. tapping a quoted note). */
+    onNoteClick: (Note) -> Unit = {},
     onImageTap: (Note, List<String>, Int) -> Unit = { _, _, _ -> },
     onOpenImageViewer: (List<String>, Int) -> Unit = { _, _ -> },
     onVideoClick: (List<String>, Int) -> Unit = { _, _ -> },
@@ -203,10 +207,10 @@ fun ModernThreadViewScreen(
     mediaPageForNote: (String) -> Int = { 0 },
     /** Store the media album page when user swipes (to AppViewModel). */
     onMediaPageChanged: (String, Int) -> Unit = { _, _ -> },
+    onRelayNavigate: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var isRefreshing by remember { mutableStateOf(false) }
-    var relayUrlToShowInfo by remember { mutableStateOf<String?>(null) }
     /** Stack of reply ids for sub-thread drill-down; back gesture pops one. Empty = full thread. */
     var rootReplyIdStack by remember { mutableStateOf<List<String>>(emptyList()) }
     val currentRootReplyId = rootReplyIdStack.lastOrNull()
@@ -241,13 +245,41 @@ fun ModernThreadViewScreen(
         }
     }
 
-    // Load replies when screen opens; clear other kind's state so we don't show stale replies
-    LaunchedEffect(note.id, relayUrls, replyKind) {
-        when (replyKind) {
-            1 -> threadRepliesViewModel.clearRepliesForNote(note.id)
-            else -> kind1RepliesViewModel.clearRepliesForNote(note.id)
+    // Preload outbox relays for quoted note authors (outbox model for faster reply loading)
+    LaunchedEffect(note.id) {
+        val discoveryRelays = listOf("wss://purplepag.es", "wss://user.kindpag.es") + cacheRelayUrls.take(2)
+        // Extract quoted note author pubkeys from the note's tags
+        note.quotedEventIds.forEach { quotedId ->
+            val quotedMeta = com.example.views.repository.QuotedNoteCache.getCached(quotedId)
+            if (quotedMeta != null && quotedMeta.authorId.isNotBlank()) {
+                com.example.views.repository.Nip65RelayListRepository.fetchOutboxRelaysForAuthor(
+                    quotedMeta.authorId, discoveryRelays
+                )
+            }
         }
-        if (relayUrls.isNotEmpty()) {
+    }
+
+    // Load replies when screen opens; clear other kind's state so we don't show stale replies.
+    // Guard: skip clear+reload if the active ViewModel already has replies for this note
+    // (e.g. returning from reply_compose — don't wipe existing replies).
+    val relayUrlsKey = remember(relayUrls) { relayUrls.sorted().joinToString(",") }
+    LaunchedEffect(note.id, relayUrlsKey, replyKind) {
+        // Skip when relay URLs haven't resolved yet — effect will re-fire when they arrive
+        if (relayUrls.isEmpty()) {
+            android.util.Log.d("ThreadView", "note=${note.id.take(8)} waiting for relay URLs... relayUrlsKey='$relayUrlsKey'")
+            return@LaunchedEffect
+        }
+        val alreadyLoaded = when (replyKind) {
+            1 -> kind1RepliesViewModel.uiState.value.note?.id == note.id && kind1RepliesViewModel.uiState.value.replies.isNotEmpty()
+            else -> threadRepliesViewModel.uiState.value.note?.id == note.id && threadRepliesViewModel.uiState.value.replies.isNotEmpty()
+        }
+        android.util.Log.d("ThreadView", "note=${note.id.take(8)} replyKind=$replyKind relays=${relayUrls.size} alreadyLoaded=$alreadyLoaded relayUrls=${relayUrls.take(3)}")
+        if (!alreadyLoaded) {
+            when (replyKind) {
+                1 -> threadRepliesViewModel.clearRepliesForNote(note.id)
+                else -> kind1RepliesViewModel.clearRepliesForNote(note.id)
+            }
+            android.util.Log.d("ThreadView", "LOADING replies: note=${note.id.take(8)} replyKind=$replyKind via ${if (replyKind == 1) "kind1RepliesVM" else "threadRepliesVM"}")
             when (replyKind) {
                 1 -> kind1RepliesViewModel.loadRepliesForNote(note, relayUrls)
                 else -> threadRepliesViewModel.loadRepliesForNote(note, relayUrls)
@@ -256,14 +288,20 @@ fun ModernThreadViewScreen(
     }
 
     // Subscribe to kind-7/9735 counts for root + reply note IDs so reactions/zaps show on thread replies
-    val threadNoteIds = remember(repliesState.replies, note.id) {
-        (repliesState.replies.map { it.id } + note.id).toSet()
+    // Key on totalReplyCount (not list ref) to avoid recomputing when the same replies re-emit
+    val threadNoteRelays = remember(repliesState.totalReplyCount, note.id) {
+        val map = mutableMapOf<String, List<String>>()
+        map[note.id] = note.relayUrls.ifEmpty { listOfNotNull(note.relayUrl) }
+        repliesState.replies.forEach { reply ->
+            map[reply.id] = reply.relayUrls
+        }
+        map.toMap()
     }
-    LaunchedEffect(threadNoteIds) {
-        com.example.views.repository.NoteCountsRepository.setThreadNoteIdsOfInterest(threadNoteIds)
+    LaunchedEffect(threadNoteRelays) {
+        com.example.views.repository.NoteCountsRepository.setThreadNoteIdsOfInterest(threadNoteRelays)
     }
     DisposableEffect(Unit) {
-        onDispose { com.example.views.repository.NoteCountsRepository.setThreadNoteIdsOfInterest(emptySet()) }
+        onDispose { com.example.views.repository.NoteCountsRepository.setThreadNoteIdsOfInterest(emptyMap()) }
     }
 
     val noteCountsByNoteId by com.example.views.repository.NoteCountsRepository.countsByNoteId.collectAsState()
@@ -388,7 +426,7 @@ fun ModernThreadViewScreen(
             )
         },
         floatingActionButton = {
-            if (replyKind == 1111 && (onOpenReplyCompose != null || onPublishThreadReply != null)) {
+            if (onOpenReplyCompose != null || onPublishThreadReply != null) {
                 FloatingActionButton(
                     onClick = {
                         if (onOpenReplyCompose != null) {
@@ -423,18 +461,24 @@ fun ModernThreadViewScreen(
                         onComment = effectiveOnComment,
                         onReact = onReact,
                         onProfileClick = onProfileClick,
-                        onNoteClick = { /* Already on thread */ },
+                        onNoteClick = onNoteClick,
                         onImageTap = onImageTap,
                         onOpenImageViewer = onOpenImageViewer,
                         onVideoClick = onVideoClick,
                         onCustomZapSend = onCustomZapSend,
                         onZap = effectiveOnZap,
-                                isZapInProgress = note.id in zapInProgressNoteIds,
+                        isZapInProgress = note.id in zapInProgressNoteIds,
                         isZapped = note.id in zappedNoteIds,
                         myZappedAmount = myZappedAmountByNoteId[note.id],
+                        overrideReplyCount = repliesState.totalReplyCount,
                         overrideZapCount = noteCountsByNoteId[note.id]?.zapCount,
+                        overrideZapTotalSats = noteCountsByNoteId[note.id]?.zapTotalSats,
                         overrideReactions = noteCountsByNoteId[note.id]?.reactions,
-                        onRelayClick = { relayUrlToShowInfo = it },
+                        overrideReactionAuthors = noteCountsByNoteId[note.id]?.reactionAuthors,
+                        overrideZapAuthors = noteCountsByNoteId[note.id]?.zapAuthors,
+                        overrideZapAmountByAuthor = noteCountsByNoteId[note.id]?.zapAmountByAuthor,
+                        overrideCustomEmojiUrls = noteCountsByNoteId[note.id]?.customEmojiUrls,
+                        onRelayClick = onRelayNavigate,
                         shouldCloseZapMenus = shouldCloseZapMenus,
                         accountNpub = accountNpub,
                         expandLinkPreviewInThread = true,
@@ -473,8 +517,14 @@ fun ModernThreadViewScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            val directCount = repliesState.replies.size
+                            val totalCount = repliesState.totalReplyCount
                             Text(
-                                text = "${repliesState.totalReplyCount} ${if (repliesState.totalReplyCount == 1) "reply" else "replies"}",
+                                text = when {
+                                    totalCount <= 1 -> if (totalCount == 1) "1 reply" else ""
+                                    directCount == totalCount -> "$totalCount replies"
+                                    else -> "$directCount replies, $totalCount total"
+                                },
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
@@ -599,13 +649,14 @@ fun ModernThreadViewScreen(
                             isLastRootReply = index == displayList.size - 1,
                             rootAuthorId = note.author.id,
                             commentStates = commentStates,
+                            noteCountsByNoteId = noteCountsByNoteId,
                             onLike = { replyId ->
                                 if (replyKind == 1) kind1RepliesViewModel.likeReply(replyId)
                                 else threadRepliesViewModel.likeReply(replyId)
                             },
                             onReply = effectiveOnCommentReply,
                             onProfileClick = onProfileClick,
-                            onRelayClick = { relayUrlToShowInfo = it },
+                            onRelayClick = onRelayNavigate,
                             shouldCloseZapMenus = shouldCloseZapMenus,
                             expandedZapMenuReplyId = expandedZapMenuCommentId,
                             onExpandZapMenu = { replyId ->
@@ -618,6 +669,8 @@ fun ModernThreadViewScreen(
                             expandedRelaysReplyId = expandedRelaysReplyId,
                             onRelaysExpandedReplyChange = { expandedRelaysReplyId = it },
                             onReadMoreReplies = { replyId -> rootReplyIdStack = rootReplyIdStack + replyId },
+                            onImageTap = { urls, idx -> onImageTap(note, urls, idx) },
+                            onVideoClick = onVideoClick,
                             modifier = Modifier.fillMaxWidth()
                         )
                         if (index < displayList.size - 1) {
@@ -627,13 +680,6 @@ fun ModernThreadViewScreen(
                 }
             }
         }
-    }
-
-    if (relayUrlToShowInfo != null) {
-        RelayInfoDialog(
-            relayUrl = relayUrlToShowInfo!!,
-            onDismiss = { relayUrlToShowInfo = null }
-        )
     }
 
     // ✅ ZAP CONFIGURATION: Dialogs for editing zap amounts
@@ -1006,6 +1052,58 @@ private fun ModernCommentCard(
                     lineHeight = 22.sp
                 )
 
+                // Embedded media parsed from comment content
+                val commentMediaUrls = remember(comment.content) {
+                    com.example.views.utils.UrlDetector.findUrls(comment.content)
+                        .filter { com.example.views.utils.UrlDetector.isImageUrl(it) || com.example.views.utils.UrlDetector.isVideoUrl(it) }
+                        .distinct()
+                }
+                if (commentMediaUrls.isNotEmpty()) {
+                    val commentImageUrls = commentMediaUrls.filter { com.example.views.utils.UrlDetector.isImageUrl(it) }
+                    val commentVideoUrls = commentMediaUrls.filter { com.example.views.utils.UrlDetector.isVideoUrl(it) }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    if (commentImageUrls.size == 1 && commentVideoUrls.isEmpty()) {
+                        AsyncImage(
+                            model = commentImageUrls[0],
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 180.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                        )
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            commentImageUrls.take(3).forEach { url ->
+                                AsyncImage(
+                                    model = url,
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                )
+                            }
+                            commentVideoUrls.take(2).forEach { _ ->
+                                Box(
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Video",
+                                        modifier = Modifier.size(24.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Optimized controls - only show/hide, no complex animations
                 if (isControlsExpanded) {
                     Column(
@@ -1282,6 +1380,8 @@ private fun ThreadedReplyCard(
     /** Root note author id; when reply.author matches, show OP highlight and "OP" label. */
     rootAuthorId: String? = null,
     commentStates: MutableMap<String, CommentState>,
+    /** Counts (reactions, zaps, replies) per note ID from NoteCountsRepository. */
+    noteCountsByNoteId: Map<String, com.example.views.repository.NoteCounts> = emptyMap(),
     onLike: (String) -> Unit,
     onReply: (String) -> Unit,
     onProfileClick: (String) -> Unit,
@@ -1299,6 +1399,8 @@ private fun ThreadedReplyCard(
     onRelaysExpandedReplyChange: (String?) -> Unit = {},
     /** When level >= MAX_THREAD_DEPTH and there are children, tap "Read N more replies" opens sub-thread. */
     onReadMoreReplies: (String) -> Unit = {},
+    onImageTap: (List<String>, Int) -> Unit = { _, _ -> },
+    onVideoClick: (List<String>, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val reply = threadedReply.reply
@@ -1312,6 +1414,20 @@ private fun ThreadedReplyCard(
     val threadLineWidth = 2.dp
     val indentPerLevel = 1.dp
     val isZapMenuExpanded = expandedZapMenuReplyId == reply.id
+
+    // Resolve author from profile cache so display name/avatar update when profiles load
+    val profileCache = com.example.views.repository.ProfileMetadataCache.getInstance()
+    val diskCacheReady by profileCache.diskCacheRestored.collectAsState()
+    val authorPubkey = remember(reply.author.id) { com.example.views.utils.normalizeAuthorIdForCache(reply.author.id) }
+    var profileRevision by remember { mutableIntStateOf(0) }
+    LaunchedEffect(authorPubkey) {
+        profileCache.profileUpdated
+            .filter { it == authorPubkey }
+            .collect { profileRevision++ }
+    }
+    val displayAuthor = remember(reply.author.id, profileRevision, diskCacheReady) {
+        profileCache.resolveAuthor(reply.author.id)
+    }
 
     LaunchedEffect(shouldCloseZapMenus) {
         if (shouldCloseZapMenus && isZapMenuExpanded) onExpandZapMenu(reply.id)
@@ -1354,6 +1470,8 @@ private fun ThreadedReplyCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
                     onClick = {
                         if (state.isCollapsed) {
                             commentStates[replyKey] = state.copy(isCollapsed = false, isExpanded = true)
@@ -1413,7 +1531,7 @@ private fun ThreadedReplyCard(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             ProfilePicture(
-                                author = reply.author,
+                                author = displayAuthor,
                                 size = 28.dp,
                                 onClick = { onProfileClick(reply.author.id) }
                             )
@@ -1424,7 +1542,7 @@ private fun ThreadedReplyCard(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f, fill = false)) {
                                         val isOp = rootAuthorId != null && com.example.views.utils.normalizeAuthorIdForCache(reply.author.id) == com.example.views.utils.normalizeAuthorIdForCache(rootAuthorId)
                                         if (isOp) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1433,10 +1551,12 @@ private fun ThreadedReplyCard(
                                                     shape = RoundedCornerShape(4.dp)
                                                 ) {
                                                     Text(
-                                                        text = reply.author.displayName,
+                                                        text = displayAuthor.displayName,
                                                         style = MaterialTheme.typography.bodyMedium,
                                                         fontWeight = FontWeight.Bold,
                                                         color = Color.White,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
                                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                                     )
                                                 }
@@ -1449,17 +1569,90 @@ private fun ThreadedReplyCard(
                                             }
                                         } else {
                                             Text(
-                                                text = reply.author.displayName,
+                                                text = displayAuthor.displayName,
                                                 style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = FontWeight.Bold
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                         }
                                     }
-                                    Text(
-                                        text = "${reply.likes} • ${formatReplyTimestamp(reply.timestamp)}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    val headerCounts = noteCountsByNoteId[reply.id]
+                                    val hcReactions = headerCounts?.reactions ?: emptyList()
+                                    val hcZapSats = headerCounts?.zapTotalSats ?: 0L
+                                    val hcEmojiUrls = headerCounts?.customEmojiUrls ?: emptyMap()
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        if (hcReactions.isNotEmpty()) {
+                                            val uniqueEmojis = hcReactions.distinct().take(3)
+                                            uniqueEmojis.forEach { emoji ->
+                                                com.example.views.ui.components.ReactionEmoji(
+                                                    emoji = emoji,
+                                                    customEmojiUrls = hcEmojiUrls,
+                                                    fontSize = 12.sp,
+                                                    imageSize = 14.dp
+                                                )
+                                            }
+                                            if (hcReactions.size > 1) {
+                                                Text(
+                                                    text = "${hcReactions.size}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color(0xFFE57373)
+                                                )
+                                            }
+                                        }
+                                        if (hcZapSats > 0) {
+                                            Text(
+                                                text = "⚡${com.example.views.utils.ZapUtils.formatZapAmount(hcZapSats)}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color(0xFFFFD700)
+                                            )
+                                        }
+                                        Text(
+                                            text = formatReplyTimestamp(reply.timestamp),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1
+                                        )
+                                        // 3-dot menu in header
+                                        var showMore by remember { mutableStateOf(false) }
+                                        Box {
+                                            Icon(
+                                                imageVector = Icons.Default.MoreVert,
+                                                contentDescription = "More",
+                                                modifier = Modifier
+                                                    .size(18.dp)
+                                                    .clickable(
+                                                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                                        indication = null
+                                                    ) { showMore = true },
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            DropdownMenu(
+                                                expanded = showMore,
+                                                onDismissRequest = { showMore = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text("View relays") },
+                                                    onClick = {
+                                                        onRelaysExpandedReplyChange(if (isRelaysExpanded) null else reply.id)
+                                                        showMore = false
+                                                    },
+                                                    leadingIcon = { Icon(Icons.Default.Public, contentDescription = null) }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Share") },
+                                                    onClick = { showMore = false },
+                                                    leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Report") },
+                                                    onClick = { showMore = false },
+                                                    leadingIcon = { Icon(Icons.Default.Report, contentDescription = null) }
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             val replyRelayUrls = reply.relayUrls.distinct().take(6)
@@ -1490,81 +1683,126 @@ private fun ThreadedReplyCard(
                             lineHeight = 20.sp
                         )
 
+                        // Embedded media (images/videos) from reply
+                        if (reply.mediaUrls.isNotEmpty()) {
+                            val imageUrls = reply.mediaUrls.filter {
+                                com.example.views.utils.UrlDetector.isImageUrl(it)
+                            }
+                            val videoUrls = reply.mediaUrls.filter {
+                                com.example.views.utils.UrlDetector.isVideoUrl(it)
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            if (imageUrls.size == 1 && videoUrls.isEmpty()) {
+                                // Single image — aspect-ratio-aware
+                                val imgUrl = imageUrls[0]
+                                val cachedRatio = com.example.views.utils.MediaAspectRatioCache.get(imgUrl)
+                                val imgModifier = if (cachedRatio != null) {
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .aspectRatio(cachedRatio.coerceIn(0.5f, 3.0f))
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { onImageTap(reply.mediaUrls, 0) }
+                                } else {
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 240.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { onImageTap(reply.mediaUrls, 0) }
+                                }
+                                AsyncImage(
+                                    model = imgUrl,
+                                    contentDescription = null,
+                                    contentScale = ContentScale.FillWidth,
+                                    modifier = imgModifier,
+                                    onSuccess = { state ->
+                                        val drawable = state.result.drawable
+                                        com.example.views.utils.MediaAspectRatioCache.add(imgUrl, drawable.intrinsicWidth, drawable.intrinsicHeight)
+                                    }
+                                )
+                            } else {
+                                // Multiple media — thumbnail row
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    imageUrls.take(3).forEachIndexed { idx, url ->
+                                        AsyncImage(
+                                            model = url,
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .size(56.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .clickable { onImageTap(reply.mediaUrls, idx) }
+                                        )
+                                    }
+                                    videoUrls.take(2).forEachIndexed { idx, _ ->
+                                        Box(
+                                            modifier = Modifier
+                                                .size(56.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                .clickable { onVideoClick(reply.mediaUrls, imageUrls.size + idx) },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.PlayArrow,
+                                                contentDescription = "Video",
+                                                modifier = Modifier.size(24.dp),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Reactions and zaps are now shown in the header row
+
                         if (isControlsExpanded) {
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    MaterialTheme.colorScheme.surfaceContainerLow,
-                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
-                                )
-                                .padding(vertical = 2.dp, horizontal = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.End),
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
                         ) {
-                            CompactModernButton(
-                                icon = Icons.Outlined.ArrowUpward,
-                                contentDescription = "Upvote",
-                                isActive = false,
-                                onClick = { /* placeholder for future voting */ }
-                            )
-                            CompactModernButton(
-                                icon = Icons.Outlined.ArrowDownward,
-                                contentDescription = "Downvote",
-                                isActive = false,
-                                onClick = { /* placeholder for future voting */ }
-                            )
-                            CompactModernButton(
-                            icon = if (reply.isLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                            contentDescription = "Like",
-                            isActive = reply.isLiked,
-                                onClick = { onLike(reply.id) },
-                                tint = if (reply.isLiked) Color.Red else null
-                            )
-                            CompactModernButton(
-                                icon = Icons.Outlined.Reply,
-                                contentDescription = "Reply",
-                                isActive = false,
-                                onClick = { onReply(reply.id) }
-                            )
-                            CompactModernButton(
-                                icon = Icons.Filled.Bolt,
-                                contentDescription = "Zap",
-                                isActive = false,
-                                onClick = { onExpandZapMenu(reply.id) }
-                            )
-                            var showMore by remember { mutableStateOf(false) }
-                            Box {
+                            Row(
+                                modifier = Modifier
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                                    )
+                                    .padding(vertical = 2.dp, horizontal = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 CompactModernButton(
-                                    icon = Icons.Default.MoreVert,
-                                    contentDescription = "More",
+                                    icon = Icons.Outlined.ArrowUpward,
+                                    contentDescription = "Upvote",
                                     isActive = false,
-                                    onClick = { showMore = true }
+                                    onClick = { /* placeholder for future voting */ }
                                 )
-                                DropdownMenu(
-                                    expanded = showMore,
-                                    onDismissRequest = { showMore = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("View relays") },
-                                        onClick = {
-                                            onRelaysExpandedReplyChange(if (isRelaysExpanded) null else reply.id)
-                                            showMore = false
-                                        },
-                                        leadingIcon = { Icon(Icons.Default.Public, contentDescription = null) }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Share") },
-                                        onClick = { showMore = false },
-                                        leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Report") },
-                                        onClick = { showMore = false },
-                                        leadingIcon = { Icon(Icons.Default.Report, contentDescription = null) }
-                                    )
-                                }
+                                CompactModernButton(
+                                    icon = Icons.Outlined.ArrowDownward,
+                                    contentDescription = "Downvote",
+                                    isActive = false,
+                                    onClick = { /* placeholder for future voting */ }
+                                )
+                                CompactModernButton(
+                                    icon = if (reply.isLiked) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                                    contentDescription = "Like",
+                                    isActive = reply.isLiked,
+                                    onClick = { onLike(reply.id) },
+                                    tint = if (reply.isLiked) Color.Red else null
+                                )
+                                CompactModernButton(
+                                    icon = Icons.Outlined.Reply,
+                                    contentDescription = "Reply",
+                                    isActive = false,
+                                    onClick = { onReply(reply.id) }
+                                )
+                                CompactModernButton(
+                                    icon = Icons.Filled.Bolt,
+                                    contentDescription = "Zap",
+                                    isActive = false,
+                                    onClick = { onExpandZapMenu(reply.id) }
+                                )
                             }
                         }
                         }
@@ -1684,6 +1922,7 @@ private fun ThreadedReplyCard(
                         isLastRootReply = true,
                         rootAuthorId = rootAuthorId,
                         commentStates = commentStates,
+                        noteCountsByNoteId = noteCountsByNoteId,
                         onLike = onLike,
                         onReply = onReply,
                         onProfileClick = onProfileClick,
@@ -1698,6 +1937,8 @@ private fun ThreadedReplyCard(
                         expandedRelaysReplyId = expandedRelaysReplyId,
                         onRelaysExpandedReplyChange = onRelaysExpandedReplyChange,
                         onReadMoreReplies = onReadMoreReplies,
+                        onImageTap = onImageTap,
+                        onVideoClick = onVideoClick,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }

@@ -50,6 +50,7 @@ object ThemePreferences {
     private val _accentColor = MutableStateFlow(AccentColor.GREEN)
     val accentColor: StateFlow<AccentColor> = _accentColor.asStateFlow()
 
+
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         _themeMode.value = ThemeMode.fromString(prefs.getString(KEY_THEME_MODE, ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name)
@@ -65,4 +66,5 @@ object ThemePreferences {
         _accentColor.value = color
         prefs.edit().putString(KEY_ACCENT_COLOR, color.name).apply()
     }
+
 }

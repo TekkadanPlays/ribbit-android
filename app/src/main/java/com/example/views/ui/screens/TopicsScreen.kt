@@ -114,7 +114,9 @@ fun TopicsScreen(
     onTopAppBarStateChange: (TopAppBarState) -> Unit = {},
     initialTopAppBarState: TopAppBarState? = null,
     onQrClick: () -> Unit = {},
+    onSidebarSettingsClick: () -> Unit = {},
     onNavigateToCreateTopic: (String?) -> Unit = {},
+    onRelayClick: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -267,8 +269,7 @@ fun TopicsScreen(
     var showZapConfigDialog by remember { mutableStateOf(false) }
     var showWalletConnectDialog by remember { mutableStateOf(false) }
 
-    // Relay info dialog state
-    var relayUrlToShowInfo by remember { mutableStateOf<String?>(null) }
+    // Relay orb tap navigates to relay log page via onRelayClick callback
 
     // Close zap menus when feed scroll starts (not during scroll)
     var wasScrolling by remember { mutableStateOf(false) }
@@ -289,13 +290,6 @@ fun TopicsScreen(
     } else {
         TopAppBarDefaults.enterAlwaysScrollBehavior(topAppBarState)
     }
-
-    // Bottom navigation bar visibility controlled by scroll
-    val isBottomNavVisible = true
-
-    // Calculate total notification count for badge
-    val notificationList by com.example.views.repository.NotificationsRepository.notifications.collectAsState(initial = emptyList())
-    val totalNotificationCount = notificationList.size
 
     // Notify parent of TopAppBarState changes for thread view inheritance
     LaunchedEffect(topAppBarState) {
@@ -331,6 +325,7 @@ fun TopicsScreen(
         connectedRelayCount = connectedRelayCount,
         subscribedRelayCount = subscribedRelayCount,
         onQrClick = onQrClick,
+        onSettingsClick = onSidebarSettingsClick,
         onItemClick = { itemId ->
             when {
                 itemId == "global" -> {
@@ -478,68 +473,32 @@ fun TopicsScreen(
                         onTopicsFavoritesFilterChange = {
                             scope.launch { listState.scrollToItem(0) }
                             showFavoritesOnly = it
-                        }
-                    )
-                }
-            },
-            bottomBar = {
-                if (!isSearchMode) {
-                    ScrollAwareBottomNavigationBar(
-                        currentDestination = "topics",
-                        isVisible = isBottomNavVisible,
-                        notificationCount = totalNotificationCount,
-                        topAppBarState = topAppBarState,
-                        onDestinationClick = { destination ->
-                            when (destination) {
-                                "topics" -> {
-                                    scope.launch {
-                                        topAppBarState.heightOffset = 0f
-                                        // ✅ Performance: Use scrollToItem for instant jump (no animation overhead)
-                                        // If already at top, this is virtually free
-                                        listState.scrollToItem(0)
-                                    }
-                                }
-                                "messages" -> onNavigateTo("messages")
-                                "relays" -> onNavigateTo("relays")
-                                "wallet" -> onNavigateTo("wallet")
-                                "notifications" -> onNavigateTo("notifications")
-                                else -> { /* Other destinations not implemented yet */ }
-                            }
-                        }
+                        },
+                        onNavigateToHome = { onNavigateTo("dashboard") },
+                        onNavigateToLive = { onNavigateTo("live_explorer") }
                     )
                 }
             },
             floatingActionButton = {
-                if (!isSearchMode) {
-                    val fabBottomBarOffset = (48 * topAppBarState.collapsedFraction).dp
-                    Box(modifier = Modifier.offset(y = fabBottomBarOffset)) {
-                        FloatingActionButton(
-                            onClick = { onNavigateToCreateTopic(selectedHashtag) },
-                            containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ) {
-                            Icon(Icons.Filled.Edit, contentDescription = "Create topic")
-                        }
+                val fabVisible by remember(topAppBarState) {
+                    derivedStateOf { topAppBarState.collapsedFraction < 0.5f }
+                }
+                AnimatedVisibility(
+                    visible = !isSearchMode && fabVisible,
+                    enter = scaleIn() + fadeIn(),
+                    exit = scaleOut() + fadeOut()
+                ) {
+                    FloatingActionButton(
+                        onClick = { onNavigateToCreateTopic(selectedHashtag) },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(bottom = 80.dp)
+                    ) {
+                        Icon(Icons.Filled.Edit, contentDescription = "Create topic")
                     }
                 }
             }
         ) { paddingValues ->
-            // Calculate dynamic content padding based on navigation bar state
-            val bottomBarHeight = 72.dp // Height of the navigation bar
-            val collapsedFraction = topAppBarState.collapsedFraction
-
-            // Calculate dynamic bottom padding
-            val dynamicBottomPadding by remember(collapsedFraction) {
-                derivedStateOf {
-                    if (collapsedFraction > 0.5f) {
-                        0.dp // Remove bottom padding to expand content
-                    } else {
-                        // Gradually reduce bottom padding as navigation bar hides
-                        bottomBarHeight * (1 - collapsedFraction)
-                    }
-                }
-            }
-
             // Main content with pull-to-refresh
             PullToRefreshBox(
                 isRefreshing = isRefreshing,
@@ -553,13 +512,7 @@ fun TopicsScreen(
                 },
                 modifier = Modifier
                     .fillMaxSize()
-                    .consumeWindowInsets(paddingValues)
-                    .padding(
-                        start = paddingValues.calculateStartPadding(LocalLayoutDirection.current),
-                        top = paddingValues.calculateTopPadding(),
-                        end = paddingValues.calculateEndPadding(LocalLayoutDirection.current),
-                        bottom = dynamicBottomPadding
-                    )
+                    .padding(paddingValues)
             ) {
                 // Topics/Hashtag Discovery Grid
                 if (topicsUiState.connectedRelays.isEmpty()) {
@@ -680,7 +633,7 @@ fun TopicsScreen(
                             LazyColumn(
                                 state = listState,
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(top = 4.dp)
+                                contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
                             ) {
                                 // "x new topics" counter (tap to refresh) — connection status lives in sidebar
                                 if (topicsUiState.newTopicsCount > 0) {
@@ -730,7 +683,7 @@ fun TopicsScreen(
                                     HashtagCard(
                                         stats = stats,
                                         isFavorited = isFavorited,
-                                        modifier = Modifier.padding(vertical = 2.dp),
+                                        modifier = Modifier.padding(vertical = 4.dp),
                                         onToggleFavorite = {
                                             if (isFavorited) {
                                                 accountStateViewModel.unsubscribeFromAnchor(anchor)
@@ -808,7 +761,7 @@ fun TopicsScreen(
                                 LazyColumn(
                                     state = listState,
                                     modifier = Modifier.fillMaxSize(),
-                                    contentPadding = PaddingValues(top = 4.dp)
+                                    contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp)
                                 ) {
                                     items(
                                         items = topicsUiState.topicsForSelectedHashtag,
@@ -848,9 +801,10 @@ fun TopicsScreen(
                                             },
                                             shouldCloseZapMenus = shouldCloseZapMenus,
                                             onZapSettings = { showZapConfigDialog = true },
-                                            onRelayClick = { relayUrlToShowInfo = it },
+                                            onRelayClick = onRelayClick,
                                             accountNpub = currentAccount?.npub,
                                             extraMoreMenuItems = moderationMenuItems,
+                                            showHashtagsSection = false,
                                             modifier = Modifier.fillMaxWidth()
                                         )
                                     }
@@ -891,14 +845,6 @@ fun TopicsScreen(
     if (showWalletConnectDialog) {
         com.example.views.ui.components.WalletConnectDialog(
             onDismiss = { showWalletConnectDialog = false }
-        )
-    }
-
-    // Relay info dialog
-    relayUrlToShowInfo?.let { url ->
-        com.example.views.ui.components.RelayInfoDialog(
-            relayUrl = url,
-            onDismiss = { relayUrlToShowInfo = null }
         )
     }
 

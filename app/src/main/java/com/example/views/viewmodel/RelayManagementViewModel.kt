@@ -33,7 +33,7 @@ class RelayManagementViewModel(
     private val storageManager: RelayStorageManager
 ) : ViewModel() {
 
-    private val nip11Retriever by lazy { relayRepository.getNip11Retriever() }
+    private val nip11Cache by lazy { relayRepository.getNip11Cache() }
 
     private val _uiState = MutableStateFlow(RelayManagementUiState())
     val uiState: StateFlow<RelayManagementUiState> = _uiState.asStateFlow()
@@ -50,14 +50,14 @@ class RelayManagementViewModel(
         // Collect relay updates from repository
         viewModelScope.launch {
             relayRepository.relays.collect { relays ->
-                _uiState.value = _uiState.value.copy(relays = relays)
+                _uiState.update { it.copy(relays = relays) }
             }
         }
 
         // Collect connection status updates from repository
         viewModelScope.launch {
             relayRepository.connectionStatus.collect { connectionStatus ->
-                _uiState.value = _uiState.value.copy(connectionStatus = connectionStatus)
+                _uiState.update { it.copy(connectionStatus = connectionStatus) }
             }
         }
     }
@@ -78,12 +78,7 @@ class RelayManagementViewModel(
             val inbox = storageManager.loadInboxRelays(pubkey)
             val cache = storageManager.loadCacheRelays(pubkey)
 
-            _uiState.value = _uiState.value.copy(
-                relayCategories = categories,
-                outboxRelays = outbox,
-                inboxRelays = inbox,
-                cacheRelays = cache
-            )
+            _uiState.update { it.copy(relayCategories = categories, outboxRelays = outbox, inboxRelays = inbox, cacheRelays = cache) }
 
             // Fetch NIP-11 info in background for all relays (personal + category)
             val allCategoryUrls = categories.flatMap { it.relays }.map { it.url }
@@ -91,22 +86,22 @@ class RelayManagementViewModel(
             val allUrls = (allCategoryUrls + allPersonalUrls).distinct()
             allUrls.forEach { url ->
                 launch(Dispatchers.IO) {
-                    nip11Retriever.loadRelayInfo(
-                        relayUrl = url,
-                        onInfo = { freshInfo ->
-                            val state = _uiState.value
-                            _uiState.value = state.copy(
-                                relayCategories = state.relayCategories.map { cat ->
-                                    cat.copy(relays = cat.relays.updateRelayInfo(url, freshInfo))
-                                },
-                                outboxRelays = state.outboxRelays.updateRelayInfo(url, freshInfo),
-                                inboxRelays = state.inboxRelays.updateRelayInfo(url, freshInfo),
-                                cacheRelays = state.cacheRelays.updateRelayInfo(url, freshInfo)
-                            )
+                    try {
+                        val freshInfo = nip11Cache.getRelayInfo(url)
+                        if (freshInfo != null) {
+                            _uiState.update { state ->
+                                state.copy(
+                                    relayCategories = state.relayCategories.map { cat ->
+                                        cat.copy(relays = cat.relays.updateRelayInfo(url, freshInfo))
+                                    },
+                                    outboxRelays = state.outboxRelays.updateRelayInfo(url, freshInfo),
+                                    inboxRelays = state.inboxRelays.updateRelayInfo(url, freshInfo),
+                                    cacheRelays = state.cacheRelays.updateRelayInfo(url, freshInfo)
+                                )
+                            }
                             saveToStorage()
-                        },
-                        onError = { _, _, _ -> /* ignore — keep existing info */ }
-                    )
+                        }
+                    } catch (_: Exception) { /* ignore — keep existing info */ }
                 }
             }
         }
@@ -151,159 +146,137 @@ class RelayManagementViewModel(
     }
 
     fun showAddRelayDialog() {
-        _uiState.value = _uiState.value.copy(showAddRelayDialog = true)
+        _uiState.update { it.copy(showAddRelayDialog = true) }
     }
 
     fun hideAddRelayDialog() {
-        _uiState.value = _uiState.value.copy(showAddRelayDialog = false, errorMessage = null)
+        _uiState.update { it.copy(showAddRelayDialog = false, errorMessage = null) }
     }
 
     fun addRelay(url: String, read: Boolean, write: Boolean) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
 
             relayRepository.addRelay(url, read, write)
                 .onSuccess {
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        showAddRelayDialog = false
-                    )
+                    _uiState.update { it.copy(isLoading = false, showAddRelayDialog = false) }
                 }
                 .onFailure { exception ->
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        errorMessage = exception.message ?: "Failed to add relay"
-                    )
+                    _uiState.update { it.copy(isLoading = false, errorMessage = exception.message ?: "Failed to add relay") }
                 }
         }
     }
 
     fun removeRelay(url: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+            _uiState.update { it.copy(isLoading = true) }
 
             relayRepository.removeRelay(url)
                 .onSuccess {
-                    _uiState.value = _uiState.value.copy(isLoading = false)
+                    _uiState.update { it.copy(isLoading = false) }
                 }
                 .onFailure { exception ->
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        errorMessage = exception.message ?: "Failed to remove relay"
-                    )
+                    _uiState.update { it.copy(isLoading = false, errorMessage = exception.message ?: "Failed to remove relay") }
                 }
         }
     }
 
     fun refreshRelayInfo(url: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+            _uiState.update { it.copy(isLoading = true) }
 
             relayRepository.refreshRelayInfo(url)
                 .onSuccess {
-                    _uiState.value = _uiState.value.copy(isLoading = false)
+                    _uiState.update { it.copy(isLoading = false) }
                 }
                 .onFailure { exception ->
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        errorMessage = exception.message ?: "Failed to refresh relay info"
-                    )
+                    _uiState.update { it.copy(isLoading = false, errorMessage = exception.message ?: "Failed to refresh relay info") }
                 }
         }
     }
 
     fun testRelayConnection(url: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+            _uiState.update { it.copy(isLoading = true) }
 
             relayRepository.testRelayConnection(url)
                 .onSuccess { isConnected ->
-                    _uiState.value = _uiState.value.copy(isLoading = false)
+                    _uiState.update { it.copy(isLoading = false) }
                     // Connection status will be updated via the repository's StateFlow
                 }
                 .onFailure { exception ->
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        errorMessage = exception.message ?: "Failed to test connection"
-                    )
+                    _uiState.update { it.copy(isLoading = false, errorMessage = exception.message ?: "Failed to test connection") }
                 }
         }
     }
 
     fun updateRelaySettings(url: String, read: Boolean, write: Boolean) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+            _uiState.update { it.copy(isLoading = true) }
 
             relayRepository.updateRelaySettings(url, read, write)
                 .onSuccess {
-                    _uiState.value = _uiState.value.copy(isLoading = false)
+                    _uiState.update { it.copy(isLoading = false) }
                 }
                 .onFailure { exception ->
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        errorMessage = exception.message ?: "Failed to update relay settings"
-                    )
+                    _uiState.update { it.copy(isLoading = false, errorMessage = exception.message ?: "Failed to update relay settings") }
                 }
         }
     }
 
     fun clearError() {
-        _uiState.value = _uiState.value.copy(errorMessage = null)
+        _uiState.update { it.copy(errorMessage = null) }
     }
 
     // Category management methods
     fun addCategory(category: RelayCategory) {
-        val currentCategories = _uiState.value.relayCategories
-        _uiState.value = _uiState.value.copy(
-            relayCategories = currentCategories + category
-        )
+        _uiState.update { it.copy(relayCategories = it.relayCategories + category) }
         saveToStorage()
     }
 
     fun updateCategory(categoryId: String, updatedCategory: RelayCategory) {
-        val currentCategories = _uiState.value.relayCategories
-        _uiState.value = _uiState.value.copy(
-            relayCategories = currentCategories.map {
-                if (it.id == categoryId) updatedCategory else it
-            }
-        )
+        _uiState.update { state ->
+            state.copy(relayCategories = state.relayCategories.map { if (it.id == categoryId) updatedCategory else it })
+        }
         saveToStorage()
     }
 
     fun deleteCategory(categoryId: String) {
-        val currentCategories = _uiState.value.relayCategories
-        _uiState.value = _uiState.value.copy(
-            relayCategories = currentCategories.filter { it.id != categoryId }
-        )
+        _uiState.update { it.copy(relayCategories = it.relayCategories.filter { cat -> cat.id != categoryId }) }
         saveToStorage()
     }
 
     fun addRelayToCategory(categoryId: String, relay: UserRelay) {
-        val currentCategories = _uiState.value.relayCategories
-        _uiState.value = _uiState.value.copy(
-            relayCategories = currentCategories.map { category ->
-                if (category.id == categoryId) {
-                    category.copy(relays = category.relays + relay)
-                } else {
-                    category
-                }
-            }
-        )
+        _uiState.update { state ->
+            state.copy(relayCategories = state.relayCategories.map { category ->
+                if (category.id == categoryId) category.copy(relays = category.relays + relay) else category
+            })
+        }
         saveToStorage()
         refreshActiveSubscription()
+
+        // Fetch NIP-11 info for the newly added relay
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val freshInfo = nip11Cache.getRelayInfo(relay.url)
+                if (freshInfo != null) {
+                    _uiState.update { state ->
+                        state.copy(relayCategories = state.relayCategories.map { cat ->
+                            cat.copy(relays = cat.relays.updateRelayInfo(relay.url, freshInfo))
+                        })
+                    }
+                    saveToStorage()
+                }
+            } catch (_: Exception) { /* ignore */ }
+        }
     }
 
     fun removeRelayFromCategory(categoryId: String, relayUrl: String) {
-        val currentCategories = _uiState.value.relayCategories
-        _uiState.value = _uiState.value.copy(
-            relayCategories = currentCategories.map { category ->
-                if (category.id == categoryId) {
-                    category.copy(relays = category.relays.filter { it.url != relayUrl })
-                } else {
-                    category
-                }
-            }
-        )
+        _uiState.update { state ->
+            state.copy(relayCategories = state.relayCategories.map { category ->
+                if (category.id == categoryId) category.copy(relays = category.relays.filter { it.url != relayUrl }) else category
+            })
+        }
         saveToStorage()
         // Re-apply subscription so the removed relay gets disconnected
         refreshActiveSubscription()
@@ -311,47 +284,35 @@ class RelayManagementViewModel(
 
     // Personal relay management methods
     fun addOutboxRelay(relay: UserRelay) {
-        _uiState.value = _uiState.value.copy(
-            outboxRelays = _uiState.value.outboxRelays + relay
-        )
+        _uiState.update { it.copy(outboxRelays = it.outboxRelays + relay) }
         saveToStorage()
         refreshActiveSubscription()
     }
 
     fun removeOutboxRelay(url: String) {
-        _uiState.value = _uiState.value.copy(
-            outboxRelays = _uiState.value.outboxRelays.filter { it.url != url }
-        )
+        _uiState.update { it.copy(outboxRelays = it.outboxRelays.filter { r -> r.url != url }) }
         saveToStorage()
     }
 
     fun addInboxRelay(relay: UserRelay) {
-        _uiState.value = _uiState.value.copy(
-            inboxRelays = _uiState.value.inboxRelays + relay
-        )
+        _uiState.update { it.copy(inboxRelays = it.inboxRelays + relay) }
         saveToStorage()
         refreshActiveSubscription()
     }
 
     fun removeInboxRelay(url: String) {
-        _uiState.value = _uiState.value.copy(
-            inboxRelays = _uiState.value.inboxRelays.filter { it.url != url }
-        )
+        _uiState.update { it.copy(inboxRelays = it.inboxRelays.filter { r -> r.url != url }) }
         saveToStorage()
     }
 
     fun addCacheRelay(relay: UserRelay) {
-        _uiState.value = _uiState.value.copy(
-            cacheRelays = _uiState.value.cacheRelays + relay
-        )
+        _uiState.update { it.copy(cacheRelays = it.cacheRelays + relay) }
         saveToStorage()
         refreshActiveSubscription()
     }
 
     fun removeCacheRelay(url: String) {
-        _uiState.value = _uiState.value.copy(
-            cacheRelays = _uiState.value.cacheRelays.filter { it.url != url }
-        )
+        _uiState.update { it.copy(cacheRelays = it.cacheRelays.filter { r -> r.url != url }) }
         saveToStorage()
     }
 
@@ -361,13 +322,11 @@ class RelayManagementViewModel(
      * Unsubscribed categories are dormant.
      */
     fun toggleCategorySubscription(categoryId: String) {
-        val currentCategories = _uiState.value.relayCategories
-        _uiState.value = _uiState.value.copy(
-            relayCategories = currentCategories.map { category ->
-                if (category.id == categoryId) category.copy(isSubscribed = !category.isSubscribed)
-                else category
-            }
-        )
+        _uiState.update { state ->
+            state.copy(relayCategories = state.relayCategories.map { category ->
+                if (category.id == categoryId) category.copy(isSubscribed = !category.isSubscribed) else category
+            })
+        }
         saveToStorage()
         refreshActiveSubscription()
     }
@@ -404,7 +363,7 @@ class RelayManagementViewModel(
      */
     fun fetchUserRelaysFromNetwork(pubkey: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+            _uiState.update { it.copy(isLoading = true) }
 
                 relayRepository.fetchUserRelayList(pubkey)
                 .onSuccess { relays ->
@@ -424,12 +383,9 @@ class RelayManagementViewModel(
                                 cat
                             }
                         }
-                        _uiState.value = current.copy(
-                            relayCategories = updatedCategories,
-                            outboxRelays = outbox,
-                            inboxRelays = inbox,
-                            isLoading = false
-                        )
+                        _uiState.update {
+                            it.copy(relayCategories = updatedCategories, outboxRelays = outbox, inboxRelays = inbox, isLoading = false)
+                        }
                         saveToStorage()
 
                         // Eagerly fetch NIP-11 info for all newly added relays so the
@@ -445,14 +401,11 @@ class RelayManagementViewModel(
                             }
                         }
                     } else {
-                        _uiState.value = current.copy(isLoading = false)
+                        _uiState.update { it.copy(isLoading = false) }
                     }
                 }
                 .onFailure { exception ->
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        errorMessage = exception.message ?: "Failed to fetch relay list from network"
-                    )
+                    _uiState.update { it.copy(isLoading = false, errorMessage = exception.message ?: "Failed to fetch relay list from network") }
                 }
         }
     }

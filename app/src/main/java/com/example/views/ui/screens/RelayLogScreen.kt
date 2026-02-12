@@ -2,6 +2,7 @@ package com.example.views.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import com.example.views.ui.components.cutoutPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -68,38 +69,41 @@ fun RelayLogScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = relayInfo?.name?.take(24) ?: relayUrl.takeAfterLastSlash(),
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+            Column(Modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = relayInfo?.name?.take(24) ?: relayUrl.takeAfterLastSlash(),
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back"
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { RelayLogBuffer.clearLogsForRelay(relayUrl) }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Delete,
+                                contentDescription = "Clear logs"
+                            )
+                        }
+                    },
+                    windowInsets = WindowInsets(0),
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+                        actionIconContentColor = MaterialTheme.colorScheme.onSurface
                     )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { RelayLogBuffer.clearLogsForRelay(relayUrl) }) {
-                        Icon(
-                            imageVector = Icons.Outlined.Delete,
-                            contentDescription = "Clear logs"
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
-                    actionIconContentColor = MaterialTheme.colorScheme.onSurface
                 )
-            )
+            }
         }
     ) { paddingValues ->
         LazyColumn(
@@ -112,6 +116,97 @@ fun RelayLogScreen(
         ) {
             item(key = "nip11_info") {
                 Nip11InfoBlock(relayUrl = relayUrl, info = relayInfo)
+            }
+            item(key = "health_stats") {
+                val healthMap by com.example.views.relay.RelayHealthTracker.healthByRelay.collectAsState()
+                val health = healthMap[relayUrl]
+                if (health != null && health.connectionAttempts > 0) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surfaceContainerLow
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Health",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                HealthStat("Connections", "${health.connectionAttempts}")
+                                HealthStat("Failures", "${health.connectionFailures}")
+                                HealthStat("Failure Rate", "${(health.failureRate * 100).toInt()}%")
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                HealthStat("Avg Latency", if (health.avgLatencyMs > 0) "${health.avgLatencyMs}ms" else "—")
+                                HealthStat("Events", "${health.eventsReceived}")
+                                HealthStat("Consec. Fails", "${health.consecutiveFailures}")
+                            }
+                            if (health.isFlagged || health.isBlocked) {
+                                Spacer(Modifier.height(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val statusText = when {
+                                        health.isBlocked -> "Blocked"
+                                        health.isFlagged -> "Flagged — unreliable"
+                                        else -> ""
+                                    }
+                                    val statusColor = if (health.isBlocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary
+                                    Surface(
+                                        shape = MaterialTheme.shapes.small,
+                                        color = statusColor.copy(alpha = 0.15f)
+                                    ) {
+                                        Text(
+                                            text = statusText,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = statusColor,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    if (health.isBlocked) {
+                                        TextButton(
+                                            onClick = { com.example.views.relay.RelayHealthTracker.unblockRelay(relayUrl) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                            modifier = Modifier.height(28.dp)
+                                        ) { Text("Unblock", style = MaterialTheme.typography.labelSmall) }
+                                    } else if (health.isFlagged) {
+                                        TextButton(
+                                            onClick = { com.example.views.relay.RelayHealthTracker.blockRelay(relayUrl) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                            modifier = Modifier.height(28.dp),
+                                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                        ) { Text("Block", style = MaterialTheme.typography.labelSmall) }
+                                        TextButton(
+                                            onClick = { com.example.views.relay.RelayHealthTracker.unflagRelay(relayUrl) },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                            modifier = Modifier.height(28.dp)
+                                        ) { Text("Dismiss", style = MaterialTheme.typography.labelSmall) }
+                                    }
+                                }
+                            }
+                            if (health.lastError != null) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = "Last error: ${health.lastError}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
             }
             item(key = "activity_header") {
                 Row(
@@ -258,6 +353,22 @@ private fun LogEntryRow(entry: RelayLogEntry) {
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun HealthStat(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
